@@ -13,8 +13,6 @@ This repository is not an operational model. It is a research codebase with a wo
 
 ## Most Important Files
 
-- [CONTEXT_HANDOFF.md](CONTEXT_HANDOFF.md): current project status, recent results, and blockers
-- [GPT54_PROMPT.md](GPT54_PROMPT.md): copy-paste prompt for handing this repo to GPT-5.4 Pro
 - [src/main.cu](src/main.cu): run loop, init loading, boundary blending, physics orchestration
 - [src/core/dynamics.cu](src/core/dynamics.cu): RK3 dycore, pressure/acoustic step, terrain metrics
 - [src/core/init.cu](src/core/init.cu): base-state and binary init loading
