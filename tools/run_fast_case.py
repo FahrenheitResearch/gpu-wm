@@ -372,7 +372,12 @@ def main() -> int:
     ).replace("+", "p").replace("-", "m")
     source_hint = f"{args.grib} {args.surface_grib or ''}".lower()
     source_tag = "hrrr" if "hrrr" in source_hint else "gfs" if "gfs" in source_hint else "grib"
-    init_suffix = "_terrain" if args.terrain_following_init and not args.init else ""
+    init_suffix_parts: list[str] = []
+    if args.terrain_following_init and not args.init:
+        init_suffix_parts.append("terrain")
+    if args.stretched_eta and not args.init:
+        init_suffix_parts.append("stretch")
+    init_suffix = f"_{'_'.join(init_suffix_parts)}" if init_suffix_parts else ""
     init_name = f"{source_tag}_init_fast_{region_tag}{init_suffix}.bin"
     plot_name = f"{source_tag}_init_fast_{region_tag}{init_suffix}.png"
     init_path = (repo_root / args.init) if args.init else (repo_root / "data" / init_name)

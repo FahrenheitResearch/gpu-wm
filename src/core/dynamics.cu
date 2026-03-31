@@ -93,6 +93,36 @@ __device__ inline double local_centered_mass_dz(
     );
 }
 
+__device__ inline double local_mass_center_spacing(
+    const real_t* __restrict__ terrain,
+    const double* __restrict__ eta_m,
+    int i, int j, int k_if, int nx,
+    double ztop
+) {
+    double terrain_val = clamped_column_terrain(terrain, i, j, nx, ztop);
+    return fmax(
+        terrain_following_layer_thickness(
+            terrain_val, eta_m[k_if - 1], eta_m[k_if], ztop
+        ),
+        1.0
+    );
+}
+
+__device__ inline double local_mass_cell_thickness(
+    const real_t* __restrict__ terrain,
+    const double* __restrict__ eta_w,
+    int i, int j, int k, int nx,
+    double ztop
+) {
+    double terrain_val = clamped_column_terrain(terrain, i, j, nx, ztop);
+    return fmax(
+        terrain_following_layer_thickness(
+            terrain_val, eta_w[k], eta_w[k + 1], ztop
+        ),
+        1.0
+    );
+}
+
 // Half-level dz for upwind vertical fluxes: distance between mass level k
 // and mass level k-1 (lower interface) or k+1 (upper interface).
 // The upwind scheme selects f[k]-f[k-1] when w>0 and f[k+1]-f[k] when w<0,
@@ -258,6 +288,17 @@ __device__ inline double reference_density_from_field(
     int nx_h, int ny_h
 ) {
     return fmax((double)rho_ref[idx3(i, j, k, nx_h, ny_h)], 1.0e-6);
+}
+
+__device__ inline double reference_density_at_interface_from_field(
+    const real_t* __restrict__ rho_ref,
+    int i, int j, int k_if, int nz,
+    int nx_h, int ny_h
+) {
+    int k_clamped = max(1, min(k_if, nz - 1));
+    double rho_lower = reference_density_from_field(rho_ref, i, j, k_clamped - 1, nx_h, ny_h);
+    double rho_upper = reference_density_from_field(rho_ref, i, j, k_clamped, nx_h, ny_h);
+    return fmax(0.5 * (rho_lower + rho_upper), 1.0e-6);
 }
 
 __device__ inline double vertical_derivative_mass_field(
@@ -844,20 +885,19 @@ __global__ void acoustic_vertical_pg_kernel(
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     int j = blockIdx.y * blockDim.y + threadIdx.y;
     int k = blockIdx.z * blockDim.z + threadIdx.z;
-    if (i >= nx || j >= ny || k < 1 || k >= nz - 1) return;
+    if (i >= nx || j >= ny || k <= 0 || k >= nz) return;
 
     int nx_h = nx + 4;
     int ny_h = ny + 4;
-    int ijk = idx3(i, j, k, nx_h, ny_h);
+    int ijk_w = idx3w(i, j, k, nx_h, ny_h);
 
-    // Use centered stencil for now (debugging: compact stencil caused blowup)
-    double dz = 2.0 * local_centered_mass_dz(terrain, eta_m, i, j, k, nx, ztop);
-    double grad_p = ((double)p_pert[idx3(i, j, k + 1, nx_h, ny_h)] -
+    double dz = local_mass_center_spacing(terrain, eta_m, i, j, k, nx, ztop);
+    double grad_p = ((double)p_pert[idx3(i, j, k, nx_h, ny_h)] -
                      (double)p_pert[idx3(i, j, k - 1, nx_h, ny_h)]) / dz;
+    double rho_if = reference_density_at_interface_from_field(rho_ref, i, j, k, nz, nx_h, ny_h);
 
-    double w_new = (double)w[ijk] - dt * grad_p /
-                   reference_density_from_field(rho_ref, i, j, k, nx_h, ny_h);
-    w[ijk] = (real_t)w_new;
+    double w_new = (double)w[ijk_w] - dt * grad_p / rho_if;
+    w[ijk_w] = (real_t)w_new;
 }
 
 // ----------------------------------------------------------
@@ -888,10 +928,9 @@ __global__ void pressure_update_kernel(
         u, v, terrain, i, j, k, nx, ny, nx_h, ny_h, dx_eff, dy_eff, ztop
     );
 
-    // Use the standard mass-level vertical derivative for dw/dz.
-    double dwdz = vertical_derivative_mass_field(
-        w, terrain, eta_m, i, j, k, nx, nz, nx_h, ny_h, ztop
-    );
+    double dz_cell = local_mass_cell_thickness(terrain, eta_w, i, j, k, nx, ztop);
+    double dwdz = ((double)w[idx3w(i, j, k + 1, nx_h, ny_h)] -
+                   (double)w[idx3w(i, j, k, nx_h, ny_h)]) / dz_cell;
 
     double div_u = hdiv + dwdz;
     double rho_ref_cell = reference_density_from_field(rho_ref, i, j, k, nx_h, ny_h);
@@ -1217,6 +1256,7 @@ void run_vertical_acoustic_substeps(
 
     dim3 block(8,8,4);
     dim3 grid3d((nx + 7) / 8, (ny + 7) / 8, (nz + 3) / 4);
+    dim3 grid3d_w((nx + 7) / 8, (ny + 7) / 8, ((nz + 1) + 3) / 4);
     dim3 block_ij(16,16);
     dim3 grid_ij((nx + 15) / 16, (ny + 15) / 16);
     int block1d = 256;
@@ -1231,7 +1271,7 @@ void run_vertical_acoustic_substeps(
     );
 
     for (int substep = 0; substep < acoustic_substeps; ++substep) {
-        acoustic_vertical_pg_kernel<<<grid3d, block>>>(
+        acoustic_vertical_pg_kernel<<<grid3d_w, block>>>(
             state.w, state.p, state.rho,
             state.terrain, state.eta_m,
             nx, ny, nz, 0.5 * dt_ac, grid.ztop
@@ -1255,7 +1295,7 @@ void run_vertical_acoustic_substeps(
         );
         refresh_fast_field_boundaries(state.p, grid, use_open_bc, nz);
 
-        acoustic_vertical_pg_kernel<<<grid3d, block>>>(
+        acoustic_vertical_pg_kernel<<<grid3d_w, block>>>(
             state.w, state.p, state.rho,
             state.terrain, state.eta_m,
             nx, ny, nz, 0.5 * dt_ac, grid.ztop

@@ -448,6 +448,7 @@ bool load_gfs_binary(StateGPU& state, GridConfig& grid, const char* filename) {
     int nx_h = nx + 4;
     int ny_h = ny + 4;
     size_t n3d_h = (size_t)nx_h * ny_h * nz;
+    size_t n3d_w = (size_t)nx_h * ny_h * (nz + 1);
     size_t n3d_file = (size_t)nx * ny * nz;
 
     // --- Read z_levels ---
@@ -521,10 +522,19 @@ bool load_gfs_binary(StateGPU& state, GridConfig& grid, const char* filename) {
         return true;
     };
 
+    auto read_and_zero_interface_w = [&](real_t* d_field, const char* name) -> bool {
+        if (fread(field_buf, sizeof(double), n3d_file, fp) != n3d_file) {
+            fprintf(stderr, "ERROR: Failed to read field %s\n", name);
+            return false;
+        }
+        CUDA_CHECK(cudaMemset(d_field, 0, n3d_w * sizeof(real_t)));
+        return true;
+    };
+
     bool ok = true;
     ok = ok && read_and_upload(state.u, "u");
     ok = ok && read_and_upload(state.v, "v");
-    ok = ok && read_and_upload(state.w, "w");
+    ok = ok && read_and_zero_interface_w(state.w, "w");
     ok = ok && read_and_upload(state.theta, "theta");
     ok = ok && read_and_upload(state.qv, "qv");
     ok = ok && read_and_upload(state.qc, "qc");
