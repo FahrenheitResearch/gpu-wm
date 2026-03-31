@@ -316,6 +316,9 @@ int main(int argc, char** argv) {
         else if (strcmp(argv[i], "--boundary-interval") == 0 && i+1 < argc) boundary_interval = atof(argv[++i]);
         else if (strcmp(argv[i], "--kdiff") == 0 && i+1 < argc) cfg.kdiff = atof(argv[++i]);
         else if (strcmp(argv[i], "--no-adaptive-stab") == 0) cfg.stability.enabled = 0;
+        else if (strcmp(argv[i], "--w-damp") == 0) cfg.stability.w_cfl_damping = 1;
+        else if (strcmp(argv[i], "--w-damp-alpha") == 0 && i+1 < argc) cfg.stability.w_damping_alpha = atof(argv[++i]);
+        else if (strcmp(argv[i], "--w-damp-beta") == 0 && i+1 < argc) cfg.stability.w_damping_beta = atof(argv[++i]);
         else if (strcmp(argv[i], "--hrrr") == 0) {
             // HRRR-like CONUS domain
             cfg.nx = 1799; cfg.ny = 1059; cfg.nz = 50;
@@ -353,6 +356,9 @@ int main(int argc, char** argv) {
             printf("  --kdiff K           Horizontal diffusion (m^2/s, default: 100)\n");
             printf("  --thompson          Use Thompson mixed-phase microphysics (default: Kessler)\n");
             printf("  --no-adaptive-stab  Disable norm-based adaptive stabilization\n");
+            printf("  --w-damp            Enable WRF-style vertical CFL damping on interface w\n");
+            printf("  --w-damp-alpha A    w damping strength (m/s/s, default: 0.3)\n");
+            printf("  --w-damp-beta B     w damping activation CFL (default: 1.0)\n");
             printf("  --test N            Idealized test: 1=bubble 2=density-current 3=convection\n\n");
             printf("Operational:\n");
             printf("  --hrrr              Full HRRR CONUS domain (1799x1059 @ 3km)\n");
@@ -437,6 +443,11 @@ int main(int argc, char** argv) {
         }
         printf("Microphysics: %s\n", use_thompson ? "Thompson (mixed-phase)" : "Kessler (warm rain)");
         printf("Adaptive stability: %s\n", cfg.stability.enabled ? "on" : "off");
+        printf("Vertical w damping: %s", cfg.stability.w_cfl_damping ? "on" : "off");
+        if (cfg.stability.w_cfl_damping) {
+            printf(" (alpha=%.2f beta=%.2f)", cfg.stability.w_damping_alpha, cfg.stability.w_damping_beta);
+        }
+        printf("\n");
         printf("Output: %s\n\n", use_netcdf ? "NetCDF" : "binary");
 
         if (mem_est > prop.totalGlobalMem * 0.9) {

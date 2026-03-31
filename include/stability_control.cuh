@@ -14,6 +14,9 @@ struct StabilityControlConfig {
     double max_diffusion_multiplier = 6.0;
     double base_pressure_retain = 0.90;
     double min_pressure_retain = 0.65;
+    int w_cfl_damping = 0;
+    double w_damping_alpha = 0.3;
+    double w_damping_beta = 1.0;
 };
 
 struct FlowControlMetrics {

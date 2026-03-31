@@ -123,6 +123,21 @@ __device__ inline double local_mass_cell_thickness(
     );
 }
 
+__device__ inline double local_centered_interface_dz(
+    const real_t* __restrict__ terrain,
+    const double* __restrict__ eta_w,
+    int i, int j, int k_if, int nx,
+    double ztop
+) {
+    double terrain_val = clamped_column_terrain(terrain, i, j, nx, ztop);
+    return fmax(
+        0.5 * terrain_following_layer_thickness(
+            terrain_val, eta_w[k_if - 1], eta_w[k_if + 1], ztop
+        ),
+        1.0
+    );
+}
+
 // Half-level dz for upwind vertical fluxes: distance between mass level k
 // and mass level k-1 (lower interface) or k+1 (upper interface).
 // The upwind scheme selects f[k]-f[k-1] when w>0 and f[k+1]-f[k] when w<0,
@@ -863,6 +878,36 @@ __global__ void diffusion_kernel(
     tend[ijk] = (real_t)result;
 }
 
+__global__ void w_vertical_cfl_damping_kernel(
+    const real_t* __restrict__ w,
+    real_t* __restrict__ w_tend,
+    const real_t* __restrict__ terrain,
+    const double* __restrict__ eta_w,
+    int nx, int ny, int nz,
+    double ztop, double dt,
+    double w_alpha, double w_beta
+) {
+    // WRF-style vertical velocity damping: only act where the local
+    // interface CFL exceeds the activation threshold.
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    int j = blockIdx.y * blockDim.y + threadIdx.y;
+    int k = blockIdx.z * blockDim.z + threadIdx.z;
+
+    if (i >= nx || j >= ny || k <= 0 || k >= nz) return;
+
+    int nx_h = nx + 4;
+    int ny_h = ny + 4;
+    int ijk_w = idx3w(i, j, k, nx_h, ny_h);
+    double w_val = (double)w[ijk_w];
+    double dz = local_centered_interface_dz(terrain, eta_w, i, j, k, nx, ztop);
+    double cfl = fabs(w_val) * dt / dz;
+
+    if (cfl <= w_beta) return;
+
+    double damping = copysign(w_alpha * (cfl - w_beta), w_val);
+    w_tend[ijk_w] = (real_t)((double)w_tend[ijk_w] - damping);
+}
+
 // ----------------------------------------------------------
 // Rayleigh damping near model top
 // ----------------------------------------------------------
@@ -1472,7 +1517,8 @@ __global__ void positive_definite_limiter_kernel(
 }
 
 void compute_tendencies(StateGPU& state, const GridConfig& grid,
-                        double kdiff_h, double kdiff_v, double dt) {
+                        double kdiff_h, double kdiff_v, double dt,
+                        const StabilityControlConfig& stability_cfg) {
     int nx = grid.nx, ny = grid.ny, nz = grid.nz;
     int nx_h = nx + 4, ny_h = ny + 4;
     int n_total = nx_h * ny_h * nz;
@@ -1544,6 +1590,14 @@ void compute_tendencies(StateGPU& state, const GridConfig& grid,
     diffusion_kernel<<<grid3d, block>>>(state.theta, state.theta_tend, state.terrain, state.eta_m, grid.mapfac_m,
         nx, ny, nz, grid.dx, grid.dy, grid.ztop, kdiff_h * 0.1, 0.0);
 
+    if (stability_cfg.w_cfl_damping) {
+        w_vertical_cfl_damping_kernel<<<grid3d_w, block>>>(
+            state.w, state.w_tend, state.terrain, state.eta,
+            nx, ny, nz, grid.ztop, dt,
+            stability_cfg.w_damping_alpha, stability_cfg.w_damping_beta
+        );
+    }
+
     // Issue 4 fix: apply positive-definite limiter to moisture tendencies.
     // This must come AFTER all tendency contributions (advection + diffusion)
     // have been accumulated, so the limiter sees the total tendency.
@@ -1585,7 +1639,7 @@ void rk3_step(StateGPU& state, StateGPU& state_old, StateGPU& state_init,
     // 1. Compute tendencies
     double kdiff_h_eff = kdiff * adaptive_state.kdiff_scale;
     double kdiff_v_eff = kdiff * 0.1 * sqrt(adaptive_state.kdiff_scale);
-    compute_tendencies(state, grid, kdiff_h_eff, kdiff_v_eff, dt_rk);
+    compute_tendencies(state, grid, kdiff_h_eff, kdiff_v_eff, dt_rk, stability_cfg);
 
     // 2. RK3 update
     rk3_update_kernel<<<grid1d, block1d>>>(state.u, state_old.u, state.u_tend, dt, rk_coeff, n_total);
