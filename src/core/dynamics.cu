@@ -158,6 +158,23 @@ __device__ inline double local_upwind_dz(
     );
 }
 
+__device__ inline double local_upwind_dz_interface(
+    const real_t* __restrict__ terrain,
+    const double* __restrict__ eta_w,
+    int i, int j, int k_if, int nz, int nx,
+    double ztop, double vel
+) {
+    if (vel > 0.0 && k_if > 0) {
+        return local_mass_cell_thickness(terrain, eta_w, i, j, k_if - 1, nx, ztop);
+    } else if (vel <= 0.0 && k_if < nz) {
+        return local_mass_cell_thickness(terrain, eta_w, i, j, k_if, nx, ztop);
+    }
+
+    return local_mass_cell_thickness(
+        terrain, eta_w, i, j, max(0, min(k_if, nz - 1)), nx, ztop
+    );
+}
+
 __device__ inline double sample_terrain_clamped(
     const real_t* __restrict__ terrain,
     int i, int j, int nx, int ny,
@@ -210,6 +227,48 @@ __device__ inline double local_metric_slope_y(
     double dy_eff, double ztop
 ) {
     return (1.0 - eta_m[k]) * local_terrain_slope_y(terrain, i, j, nx, ny, dy_eff, ztop);
+}
+
+__device__ inline double local_metric_slope_x_at_eta(
+    const real_t* __restrict__ terrain,
+    double eta_value,
+    int i, int j, int nx, int ny,
+    double dx_eff, double ztop
+) {
+    return (1.0 - eta_value) * local_terrain_slope_x(terrain, i, j, nx, ny, dx_eff, ztop);
+}
+
+__device__ inline double local_metric_slope_y_at_eta(
+    const real_t* __restrict__ terrain,
+    double eta_value,
+    int i, int j, int nx, int ny,
+    double dy_eff, double ztop
+) {
+    return (1.0 - eta_value) * local_terrain_slope_y(terrain, i, j, nx, ny, dy_eff, ztop);
+}
+
+__device__ inline double mass_field_at_interface(
+    const real_t* __restrict__ field,
+    int i, int j, int k_if, int nz,
+    int nx_h, int ny_h
+) {
+    int k_lower = max(0, min(k_if - 1, nz - 1));
+    int k_upper = max(0, min(k_if, nz - 1));
+    return 0.5 * (
+        (double)field[idx3(i, j, k_lower, nx_h, ny_h)] +
+        (double)field[idx3(i, j, k_upper, nx_h, ny_h)]
+    );
+}
+
+__device__ inline double interface_field_at_mass_level(
+    const real_t* __restrict__ field,
+    int i, int j, int k,
+    int nx_h, int ny_h
+) {
+    return 0.5 * (
+        (double)field[idx3w(i, j, k, nx_h, ny_h)] +
+        (double)field[idx3w(i, j, k + 1, nx_h, ny_h)]
+    );
 }
 
 __device__ inline double centered_vertical_derivative(
@@ -506,7 +565,6 @@ __global__ void advection_momentum_kernel(
     const real_t* __restrict__ w,
     real_t* __restrict__ u_tend,
     real_t* __restrict__ v_tend,
-    real_t* __restrict__ w_tend,
     const real_t* __restrict__ terrain,
     const double* __restrict__ eta_m,
     const double* __restrict__ mapfac_m,
@@ -525,11 +583,8 @@ __global__ void advection_momentum_kernel(
     int ijk = idx3(i, j, k, nx_h, ny_h);
 
     double u_c = (double)u[ijk], v_c = (double)v[ijk];
-    double w_c = (double)w[ijk];
-    // Issue 1 fix: direction-aware dz for upwind vertical advection of fields.
-    // Centered dz kept for metric-slope vertical upwind (smooth analytic fields).
-    double dz_upwind = local_upwind_dz(terrain, eta_m, i, j, k, nz, nx, ztop, w_c);
-    double dz_centered = local_centered_mass_dz(terrain, eta_m, i, j, k, nx, ztop);
+    double w_mass = interface_field_at_mass_level(w, i, j, k, nx_h, ny_h);
+    double dz_upwind = local_upwind_dz(terrain, eta_m, i, j, k, nz, nx, ztop, w_mass);
     double mapfac = mapfac_m ? mapfac_m[j] : 1.0;
     double dx_eff = dx / mapfac;
     double dy_eff = dy / mapfac;
@@ -539,53 +594,88 @@ __global__ void advection_momentum_kernel(
     {
         double ax = advect_3rd(u_c, F(u,-2,0,0), F(u,-1,0,0), F(u,0,0,0), F(u,1,0,0), F(u,2,0,0), dx_eff);
         double ay = advect_3rd(v_c, F(u,0,-2,0), F(u,0,-1,0), F(u,0,0,0), F(u,0,1,0), F(u,0,2,0), dy_eff);
-        double az = upwind_flux(w_c, F(u,0,0,-1), F(u,0,0,0), F(u,0,0,1), dz_upwind);
+        double az = upwind_flux(w_mass, F(u,0,0,-1), F(u,0,0,0), F(u,0,0,1), dz_upwind);
         u_tend[ijk] = (real_t)((double)u_tend[ijk] - (ax + ay + az));
     }
     {
         double ax = advect_3rd(u_c, F(v,-2,0,0), F(v,-1,0,0), F(v,0,0,0), F(v,1,0,0), F(v,2,0,0), dx_eff);
         double ay = advect_3rd(v_c, F(v,0,-2,0), F(v,0,-1,0), F(v,0,0,0), F(v,0,1,0), F(v,0,2,0), dy_eff);
-        double az = upwind_flux(w_c, F(v,0,0,-1), F(v,0,0,0), F(v,0,0,1), dz_upwind);
+        double az = upwind_flux(w_mass, F(v,0,0,-1), F(v,0,0,0), F(v,0,0,1), dz_upwind);
         v_tend[ijk] = (real_t)((double)v_tend[ijk] - (ax + ay + az));
     }
-    {
-        double ax = advect_3rd(u_c, F(w,-2,0,0), F(w,-1,0,0), F(w,0,0,0), F(w,1,0,0), F(w,2,0,0), dx_eff);
-        double ay = advect_3rd(v_c, F(w,0,-2,0), F(w,0,-1,0), F(w,0,0,0), F(w,0,1,0), F(w,0,2,0), dy_eff);
-        double az = upwind_flux(w_c, F(w,0,0,-1), F(w,0,0,0), F(w,0,0,1), dz_upwind);
-        double zx_mm = local_metric_slope_x(terrain, eta_m, i - 2, j, k, nx, ny, dx_eff, ztop);
-        double zx_m = local_metric_slope_x(terrain, eta_m, i - 1, j, k, nx, ny, dx_eff, ztop);
-        double zx_c = local_metric_slope_x(terrain, eta_m, i, j, k, nx, ny, dx_eff, ztop);
-        double zx_p = local_metric_slope_x(terrain, eta_m, i + 1, j, k, nx, ny, dx_eff, ztop);
-        double zx_pp = local_metric_slope_x(terrain, eta_m, i + 2, j, k, nx, ny, dx_eff, ztop);
-        double zx_jmm = local_metric_slope_x(terrain, eta_m, i, j - 2, k, nx, ny, dx_eff, ztop);
-        double zx_jm = local_metric_slope_x(terrain, eta_m, i, j - 1, k, nx, ny, dx_eff, ztop);
-        double zx_jp = local_metric_slope_x(terrain, eta_m, i, j + 1, k, nx, ny, dx_eff, ztop);
-        double zx_jpp = local_metric_slope_x(terrain, eta_m, i, j + 2, k, nx, ny, dx_eff, ztop);
-        double zx_km = local_metric_slope_x(terrain, eta_m, i, j, k - 1, nx, ny, dx_eff, ztop);
-        double zx_kp = local_metric_slope_x(terrain, eta_m, i, j, k + 1, nx, ny, dx_eff, ztop);
-        double azx = advect_3rd(u_c, zx_mm, zx_m, zx_c, zx_p, zx_pp, dx_eff)
-                   + advect_3rd(v_c, zx_jmm, zx_jm, zx_c, zx_jp, zx_jpp, dy_eff)
-                   + upwind_flux(w_c, zx_km, zx_c, zx_kp, dz_centered);
-
-        double zy_mm = local_metric_slope_y(terrain, eta_m, i - 2, j, k, nx, ny, dy_eff, ztop);
-        double zy_m = local_metric_slope_y(terrain, eta_m, i - 1, j, k, nx, ny, dy_eff, ztop);
-        double zy_c = local_metric_slope_y(terrain, eta_m, i, j, k, nx, ny, dy_eff, ztop);
-        double zy_p = local_metric_slope_y(terrain, eta_m, i + 1, j, k, nx, ny, dy_eff, ztop);
-        double zy_pp = local_metric_slope_y(terrain, eta_m, i + 2, j, k, nx, ny, dy_eff, ztop);
-        double zy_jmm = local_metric_slope_y(terrain, eta_m, i, j - 2, k, nx, ny, dy_eff, ztop);
-        double zy_jm = local_metric_slope_y(terrain, eta_m, i, j - 1, k, nx, ny, dy_eff, ztop);
-        double zy_jp = local_metric_slope_y(terrain, eta_m, i, j + 1, k, nx, ny, dy_eff, ztop);
-        double zy_jpp = local_metric_slope_y(terrain, eta_m, i, j + 2, k, nx, ny, dy_eff, ztop);
-        double zy_km = local_metric_slope_y(terrain, eta_m, i, j, k - 1, nx, ny, dy_eff, ztop);
-        double zy_kp = local_metric_slope_y(terrain, eta_m, i, j, k + 1, nx, ny, dy_eff, ztop);
-        double azy = advect_3rd(u_c, zy_mm, zy_m, zy_c, zy_p, zy_pp, dx_eff)
-                   + advect_3rd(v_c, zy_jmm, zy_jm, zy_c, zy_jp, zy_jpp, dy_eff)
-                   + upwind_flux(w_c, zy_km, zy_c, zy_kp, dz_centered);
-
-        double metric_source = u_c * azx + v_c * azy;
-        w_tend[ijk] = (real_t)((double)w_tend[ijk] - (ax + ay + az) - metric_source);
-    }
     #undef F
+}
+
+__global__ void advection_w_interface_kernel(
+    const real_t* __restrict__ u,
+    const real_t* __restrict__ v,
+    const real_t* __restrict__ w,
+    real_t* __restrict__ w_tend,
+    const real_t* __restrict__ terrain,
+    const double* __restrict__ eta_w,
+    const double* __restrict__ mapfac_m,
+    int nx, int ny, int nz,
+    double dx, double dy,
+    double ztop
+) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    int j = blockIdx.y * blockDim.y + threadIdx.y;
+    int k = blockIdx.z * blockDim.z + threadIdx.z;
+
+    if (i >= nx || j >= ny || k <= 0 || k >= nz) return;
+
+    int nx_h = nx + 4;
+    int ny_h = ny + 4;
+    int ijk_w = idx3w(i, j, k, nx_h, ny_h);
+    double mapfac = mapfac_m ? mapfac_m[j] : 1.0;
+    double dx_eff = dx / mapfac;
+    double dy_eff = dy / mapfac;
+    double eta_if = eta_w[k];
+    double u_if = mass_field_at_interface(u, i, j, k, nz, nx_h, ny_h);
+    double v_if = mass_field_at_interface(v, i, j, k, nz, nx_h, ny_h);
+    double w_if = (double)w[ijk_w];
+    double dz_upwind = local_upwind_dz_interface(terrain, eta_w, i, j, k, nz, nx, ztop, w_if);
+
+    #define FW(di, dj, dk) (double)w[idx3w(i+(di), j+(dj), k+(dk), nx_h, ny_h)]
+
+    double ax = advect_3rd(u_if, FW(-2,0,0), FW(-1,0,0), FW(0,0,0), FW(1,0,0), FW(2,0,0), dx_eff);
+    double ay = advect_3rd(v_if, FW(0,-2,0), FW(0,-1,0), FW(0,0,0), FW(0,1,0), FW(0,2,0), dy_eff);
+    double az = upwind_flux(w_if, FW(0,0,-1), FW(0,0,0), FW(0,0,1), dz_upwind);
+
+    double zx_mm = local_metric_slope_x_at_eta(terrain, eta_if, i - 2, j, nx, ny, dx_eff, ztop);
+    double zx_m = local_metric_slope_x_at_eta(terrain, eta_if, i - 1, j, nx, ny, dx_eff, ztop);
+    double zx_c = local_metric_slope_x_at_eta(terrain, eta_if, i, j, nx, ny, dx_eff, ztop);
+    double zx_p = local_metric_slope_x_at_eta(terrain, eta_if, i + 1, j, nx, ny, dx_eff, ztop);
+    double zx_pp = local_metric_slope_x_at_eta(terrain, eta_if, i + 2, j, nx, ny, dx_eff, ztop);
+    double zx_jmm = local_metric_slope_x_at_eta(terrain, eta_if, i, j - 2, nx, ny, dx_eff, ztop);
+    double zx_jm = local_metric_slope_x_at_eta(terrain, eta_if, i, j - 1, nx, ny, dx_eff, ztop);
+    double zx_jp = local_metric_slope_x_at_eta(terrain, eta_if, i, j + 1, nx, ny, dx_eff, ztop);
+    double zx_jpp = local_metric_slope_x_at_eta(terrain, eta_if, i, j + 2, nx, ny, dx_eff, ztop);
+    double zx_km = local_metric_slope_x_at_eta(terrain, eta_w[k - 1], i, j, nx, ny, dx_eff, ztop);
+    double zx_kp = local_metric_slope_x_at_eta(terrain, eta_w[k + 1], i, j, nx, ny, dx_eff, ztop);
+    double azx = advect_3rd(u_if, zx_mm, zx_m, zx_c, zx_p, zx_pp, dx_eff)
+               + advect_3rd(v_if, zx_jmm, zx_jm, zx_c, zx_jp, zx_jpp, dy_eff)
+               + upwind_flux(w_if, zx_km, zx_c, zx_kp, dz_upwind);
+
+    double zy_mm = local_metric_slope_y_at_eta(terrain, eta_if, i - 2, j, nx, ny, dy_eff, ztop);
+    double zy_m = local_metric_slope_y_at_eta(terrain, eta_if, i - 1, j, nx, ny, dy_eff, ztop);
+    double zy_c = local_metric_slope_y_at_eta(terrain, eta_if, i, j, nx, ny, dy_eff, ztop);
+    double zy_p = local_metric_slope_y_at_eta(terrain, eta_if, i + 1, j, nx, ny, dy_eff, ztop);
+    double zy_pp = local_metric_slope_y_at_eta(terrain, eta_if, i + 2, j, nx, ny, dy_eff, ztop);
+    double zy_jmm = local_metric_slope_y_at_eta(terrain, eta_if, i, j - 2, nx, ny, dy_eff, ztop);
+    double zy_jm = local_metric_slope_y_at_eta(terrain, eta_if, i, j - 1, nx, ny, dy_eff, ztop);
+    double zy_jp = local_metric_slope_y_at_eta(terrain, eta_if, i, j + 1, nx, ny, dy_eff, ztop);
+    double zy_jpp = local_metric_slope_y_at_eta(terrain, eta_if, i, j + 2, nx, ny, dy_eff, ztop);
+    double zy_km = local_metric_slope_y_at_eta(terrain, eta_w[k - 1], i, j, nx, ny, dy_eff, ztop);
+    double zy_kp = local_metric_slope_y_at_eta(terrain, eta_w[k + 1], i, j, nx, ny, dy_eff, ztop);
+    double azy = advect_3rd(u_if, zy_mm, zy_m, zy_c, zy_p, zy_pp, dx_eff)
+               + advect_3rd(v_if, zy_jmm, zy_jm, zy_c, zy_jp, zy_jpp, dy_eff)
+               + upwind_flux(w_if, zy_km, zy_c, zy_kp, dz_upwind);
+
+    double metric_source = u_if * azx + v_if * azy;
+    w_tend[ijk_w] = (real_t)((double)w_tend[ijk_w] - (ax + ay + az) - metric_source);
+
+    #undef FW
 }
 
 // ----------------------------------------------------------
@@ -617,7 +707,7 @@ __global__ void advection_scalar_kernel(
     double dy_eff = dy / mapfac;
     double u_c = (double)u[ijk];
     double v_c = (double)v[ijk];
-    double w_c = (double)w[idx3(i,j,k,nx_h,ny_h)];
+    double w_c = interface_field_at_mass_level(w, i, j, k, nx_h, ny_h);
 
     // Issue 1 fix: direction-aware dz for vertical upwind
     double dz_upwind = local_upwind_dz(terrain, eta_m, i, j, k, nz, nx, ztop, w_c);
@@ -1390,6 +1480,7 @@ void compute_tendencies(StateGPU& state, const GridConfig& grid,
 
     dim3 block(8,8,4);
     dim3 grid3d((nx+7)/8,(ny+7)/8,(nz+3)/4);
+    dim3 grid3d_w((nx + 7) / 8, (ny + 7) / 8, ((nz + 1) + 3) / 4);
     int block1d = 256, grid1d = (n_total+255)/256;
     int grid1d_w = (n_total_w + block1d - 1) / block1d;
 
@@ -1411,8 +1502,12 @@ void compute_tendencies(StateGPU& state, const GridConfig& grid,
     // Advection
     advection_momentum_kernel<<<grid3d, block>>>(
         state.u, state.v, state.w,
-        state.u_tend, state.v_tend, state.w_tend,
+        state.u_tend, state.v_tend,
         state.terrain, state.eta_m, grid.mapfac_m, nx, ny, nz, grid.dx, grid.dy, grid.ztop);
+    advection_w_interface_kernel<<<grid3d_w, block>>>(
+        state.u, state.v, state.w, state.w_tend,
+        state.terrain, state.eta, grid.mapfac_m,
+        nx, ny, nz, grid.dx, grid.dy, grid.ztop);
 
     advection_scalar_kernel<<<grid3d, block>>>(
         state.theta, state.u, state.v, state.w, state.theta_tend,
