@@ -463,23 +463,25 @@ bool load_gfs_binary(StateGPU& state, GridConfig& grid, const char* filename) {
            z_levels_h[0], z_levels_h[1], z_levels_h[nz - 1]);
 
     // --- Setup vertical levels (eta) from z_levels ---
-    // Derive eta from z_levels: eta = z / ztop
+    // z_levels stores the mass-level reference heights. Recover eta_m
+    // directly, then reconstruct eta_w from the same midpoint relation
+    // used by the init writer: eta_m[k] = 0.5 * (eta_w[k] + eta_w[k + 1]).
     release_vertical_levels(grid);
     grid.eta = new double[nz + 1];
     grid.eta_m = new double[nz];
-    // z_levels are cell midpoints. Reconstruct w-levels (cell edges).
     double* z_w = new double[nz + 1];
-    z_w[0] = 0.0;
+    grid.eta[0] = 0.0;
     for (int k = 0; k < nz; k++) {
-        if (k < nz - 1) {
-            z_w[k + 1] = 0.5 * (z_levels_h[k] + z_levels_h[k + 1]);
-        } else {
-            z_w[k + 1] = grid.ztop;
-        }
         grid.eta_m[k] = z_levels_h[k] / grid.ztop;
+        grid.eta[k + 1] = 2.0 * grid.eta_m[k] - grid.eta[k];
     }
+    if (fabs(grid.eta[nz] - 1.0) > 1.0e-6) {
+        printf("  WARNING: reconstructed eta top %.8f differs from 1.0; forcing exact top interface\n",
+               grid.eta[nz]);
+    }
+    grid.eta[nz] = 1.0;
     for (int k = 0; k <= nz; k++) {
-        grid.eta[k] = z_w[k] / grid.ztop;
+        z_w[k] = grid.eta[k] * grid.ztop;
     }
 
     // --- Allocate GPU state ---
@@ -741,23 +743,33 @@ bool load_gfs_binary(StateGPU& state, GridConfig& grid, const char* filename) {
     if (use_terrain_aware_reference) {
         printf("  Building terrain-aware hydrostatic reference from terrain-following init...\n");
 
+        auto sample_eta_index = [&](double eta_target, int& k0, double& frac) {
+            if (eta_target <= grid.eta_m[0]) {
+                k0 = 0;
+                frac = (eta_target - grid.eta_m[0]) /
+                       fmax(grid.eta_m[1] - grid.eta_m[0], 1.0e-6);
+                return;
+            }
+            if (eta_target >= grid.eta_m[nz - 1]) {
+                k0 = nz - 2;
+                frac = (eta_target - grid.eta_m[nz - 2]) /
+                       fmax(grid.eta_m[nz - 1] - grid.eta_m[nz - 2], 1.0e-6);
+                return;
+            }
+            k0 = 0;
+            while (k0 < nz - 1 && grid.eta_m[k0 + 1] < eta_target) {
+                k0++;
+            }
+            frac = (eta_target - grid.eta_m[k0]) /
+                   fmax(grid.eta_m[k0 + 1] - grid.eta_m[k0], 1.0e-6);
+        };
+
         auto sample_halo_column = [&](const real_t* field, int i, int j, double terrain, double z_target) -> double {
             double column_depth = fmax(grid.ztop - terrain, 1.0);
-            double dz_col = column_depth / nz;
-            double z0 = terrain + 0.5 * dz_col;
-            double src_pos = (z_target - z0) / dz_col;
             int k0;
             double frac;
-            if (src_pos <= 0.0) {
-                k0 = 0;
-                frac = src_pos;
-            } else if (src_pos >= nz - 1) {
-                k0 = nz - 2;
-                frac = src_pos - (nz - 2);
-            } else {
-                k0 = (int)floor(src_pos);
-                frac = src_pos - k0;
-            }
+            double eta_target = (z_target - terrain) / column_depth;
+            sample_eta_index(eta_target, k0, frac);
             int idx0 = k0 * ny_h * nx_h + (j + 2) * nx_h + (i + 2);
             int idx1 = (k0 + 1) * ny_h * nx_h + (j + 2) * nx_h + (i + 2);
             double v0 = (double)field[idx0];
@@ -767,21 +779,10 @@ bool load_gfs_binary(StateGPU& state, GridConfig& grid, const char* filename) {
 
         auto sample_file_column = [&](const double* field, int i, int j, double terrain, double z_target) -> double {
             double column_depth = fmax(grid.ztop - terrain, 1.0);
-            double dz_col = column_depth / nz;
-            double z0 = terrain + 0.5 * dz_col;
-            double src_pos = (z_target - z0) / dz_col;
             int k0;
             double frac;
-            if (src_pos <= 0.0) {
-                k0 = 0;
-                frac = src_pos;
-            } else if (src_pos >= nz - 1) {
-                k0 = nz - 2;
-                frac = src_pos - (nz - 2);
-            } else {
-                k0 = (int)floor(src_pos);
-                frac = src_pos - k0;
-            }
+            double eta_target = (z_target - terrain) / column_depth;
+            sample_eta_index(eta_target, k0, frac);
             int idx0 = k0 * ny * nx + j * nx + i;
             int idx1 = (k0 + 1) * ny * nx + j * nx + i;
             double v0 = field[idx0];

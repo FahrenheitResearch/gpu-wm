@@ -4,6 +4,8 @@
 
 This repository is not an operational model. It is a research codebase with a working regional forecast pipeline, real-data HRRR/GFS initialization, NetCDF output, and a partially modernized dycore that still has important structural work left.
 
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the current blocker chain, fast-case workflow, and contribution priorities.
+
 ## Current Status
 
 - Real-data terrain-following initialization works for HRRR and GFS.
