@@ -1,0 +1,13 @@
+build/
+build-*/
+output/
+plots/
+data/
+run-fast/
+run-cycles/
+run-*/
+tools/__pycache__/
+*.bin
+*.o
+*.d
+tools/rust-init-writer/target/
