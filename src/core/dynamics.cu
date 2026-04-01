@@ -924,7 +924,7 @@ __global__ void advection_scalar_kernel(
 // Horizontal moisture advection stays on the legacy 3rd-order path for now so
 // the A/B focuses on vertical mass/tracer consistency rather than a full
 // scalar-form rewrite.
-__global__ void advection_moisture_conservative_kernel(
+__global__ void advection_moisture_vertical_flux_kernel(
     const real_t* __restrict__ scalar,
     const real_t* __restrict__ u,
     const real_t* __restrict__ v,
@@ -1932,14 +1932,14 @@ void compute_tendencies(StateGPU& state, const GridConfig& grid,
     advection_scalar_kernel<<<grid3d, block>>>(
         state.theta, state.u, state.v, state.w, state.theta_tend,
         state.terrain, state.eta_m, grid.mapfac_m, nx, ny, nz, grid.dx, grid.dy, grid.ztop);
-    if (stability_cfg.conservative_moisture_transport) {
-        advection_moisture_conservative_kernel<<<grid3d, block>>>(
+    if (stability_cfg.vertical_moisture_flux) {
+        advection_moisture_vertical_flux_kernel<<<grid3d, block>>>(
             state.qv, state.u, state.v, state.w, state.qv_tend,
             state.terrain, state.eta, grid.mapfac_m, nx, ny, nz, grid.dx, grid.dy, grid.ztop);
-        advection_moisture_conservative_kernel<<<grid3d, block>>>(
+        advection_moisture_vertical_flux_kernel<<<grid3d, block>>>(
             state.qc, state.u, state.v, state.w, state.qc_tend,
             state.terrain, state.eta, grid.mapfac_m, nx, ny, nz, grid.dx, grid.dy, grid.ztop);
-        advection_moisture_conservative_kernel<<<grid3d, block>>>(
+        advection_moisture_vertical_flux_kernel<<<grid3d, block>>>(
             state.qr, state.u, state.v, state.w, state.qr_tend,
             state.terrain, state.eta, grid.mapfac_m, nx, ny, nz, grid.dx, grid.dy, grid.ztop);
     } else {

@@ -325,7 +325,7 @@ int main(int argc, char** argv) {
             cfg.stability.w_transport_blend = std::max(0.0, std::min(1.0, cfg.stability.w_transport_blend));
         }
         else if (strcmp(argv[i], "--w-transport-diagnostics") == 0) cfg.stability.w_transport_diagnostics = 1;
-        else if (strcmp(argv[i], "--conservative-moisture-transport") == 0) cfg.stability.conservative_moisture_transport = 1;
+        else if (strcmp(argv[i], "--vertical-moisture-flux") == 0) cfg.stability.vertical_moisture_flux = 1;
         else if (strcmp(argv[i], "--hrrr") == 0) {
             // HRRR-like CONUS domain
             cfg.nx = 1799; cfg.ny = 1059; cfg.nz = 50;
@@ -368,7 +368,7 @@ int main(int argc, char** argv) {
             printf("  --w-damp-beta B     w damping activation CFL (default: 1.0)\n");
             printf("  --w-transport-blend B  Blend legacy and ERF-style w transport (0..1, default: 1.0)\n");
             printf("  --w-transport-diagnostics  Print interval diagnostics for old/new w transport terms\n");
-            printf("  --conservative-moisture-transport  Use transformed conservative transport for qv/qc/qr only\n");
+            printf("  --vertical-moisture-flux  Use interface-flux vertical transport for qv/qc/qr only\n");
             printf("  --test N            Idealized test: 1=bubble 2=density-current 3=convection 4=free-stream-terrain\n\n");
             printf("Operational:\n");
             printf("  --hrrr              Full HRRR CONUS domain (1799x1059 @ 3km)\n");
