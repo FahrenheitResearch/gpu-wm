@@ -2,6 +2,7 @@ build/
 build-*/
 output/
 plots/
+node_plots/**/*.png
 data/
 run-fast/
 run-cycles/
