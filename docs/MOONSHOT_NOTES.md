@@ -295,6 +295,23 @@ Keep only if:
 - `QV` RMSE does not regress
 - `THETA` and `mean|w|` stay neutral-to-better
 
+Prototype outcome:
+
+- this first full transformed conservative moisture rewrite is falsified
+- H100 gate result:
+  - `uniform_120` failed on `mean|w|` (`8.04`)
+  - `stretch_900` failed on `mean|w|` (`4.96`)
+  - worst of all, `stretch_900` moisture drift flipped sign:
+    - outer band `qtot_d = +29.92%`
+    - interior `qtot_d = +88.95%`
+
+Conclusion:
+
+- do not spend more regional runs on the full moisture-conservative form as currently written
+- the next scalar experiment should be the narrower fallback:
+  - keep horizontal scalar advection unchanged
+  - replace only the vertical moisture term with interface-flux divergence using true `w[idx3w]` and `eta_w`
+
 ### B. Do Not Fake Lateral `p-w` Characteristics; Radiate `p` First
 
 Category: solver correctness

@@ -161,6 +161,31 @@ Three fresh moonshot reviews are now concrete enough to test, in this order:
    - rationale: the smallest serious numerics jump that could beat another damping sweep is a one-thread-per-column tridiagonal solve for the stiff vertical acoustic pair
    - this is larger than the first two ideas and should stay behind them unless the smaller transport/boundary experiments flatline
 
+## Most Recent Prototype Result
+
+The first moisture-only conservative transport prototype is now falsified on the canonical gates.
+
+Branch:
+
+- `exp/moisture-conservative-transport`
+
+Result on H100 short gates:
+
+- `uniform_120`: `U/V/TH = 0.14 / 0.15 / 0.46`, but `mean|w| = 8.04` failed the `6.5` gate
+- `stretch_120`: `U/V/TH = 1.05 / 1.38 / 8.16`, but `mean_w = +6.90 m/s`, `mean|w| = 6.90`
+- `stretch_900`: `U/V/TH = 2.68 / 3.97 / 15.21`, but `mean|w| = 4.96` failed the `4.0` gate
+- worst signal: moisture drift flipped sign and exploded:
+  - `stretch_900 outer_20 qtot_d = +29.92%`
+  - `stretch_900 interior qtot_d = +88.95%`
+
+Interpretation:
+
+- the full transformed conservative moisture rewrite is not just neutral; it is wrong in its current form
+- the failure is strong enough that it should not be queued behind more regional runs
+- the right fallback is the narrower variant suggested by the moonshot review:
+  - keep horizontal scalar advection unchanged
+  - test only a vertical moisture-flux replacement using true interface `w` / `eta_w` divergence
+
 ## Immediate Next Work
 
 The next implementation target is:
