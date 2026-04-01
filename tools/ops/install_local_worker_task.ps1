@@ -12,9 +12,17 @@ if (-not (Test-Path $tickScript)) {
 }
 
 $taskRun = 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "{0}" -RepoRoot "{1}"' -f $tickScript, $RepoRoot
-$null = & schtasks.exe /Create /F /SC MINUTE /MO 10 /TN $TaskName /TR $taskRun /RL HIGHEST
-if ($LASTEXITCODE -ne 0) {
-    throw "schtasks.exe failed while creating task '$TaskName'"
+$null = & schtasks.exe /Query /TN $TaskName 2>$null
+if ($LASTEXITCODE -eq 0) {
+    $null = & schtasks.exe /Change /TN $TaskName /TR $taskRun
+    if ($LASTEXITCODE -ne 0) {
+        throw "schtasks.exe failed while updating task '$TaskName'"
+    }
+} else {
+    $null = & schtasks.exe /Create /F /SC MINUTE /MO 10 /TN $TaskName /TR $taskRun
+    if ($LASTEXITCODE -ne 0) {
+        throw "schtasks.exe failed while creating task '$TaskName'"
+    }
 }
 
 Write-Host "Installed scheduled task '$TaskName' for $tickScript"
