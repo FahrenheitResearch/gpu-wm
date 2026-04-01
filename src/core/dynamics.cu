@@ -916,13 +916,14 @@ __global__ void advection_scalar_kernel(
 }
 
 // ----------------------------------------------------------
-// Moisture-only transformed conservative transport
+// Moisture-only interface-aware vertical transport
 // ----------------------------------------------------------
-// This aligns qv/qc/qr with the same h-weighted horizontal divergence and
-// interface-w vertical flux skeleton used by the pressure continuity update.
-// Theta stays on the legacy scalar kernel for the first prototype so the
-// experiment only answers whether moisture drift is mainly a transport-form
-// mismatch rather than a general scalar rewrite issue.
+// The full conservative horizontal+vertical prototype proved too aggressive on
+// the short gates. Narrow the experiment to the part most strongly implicated
+// by the regional qtot drift: vertical tracer transport with true interface w.
+// Horizontal moisture advection stays on the legacy 3rd-order path for now so
+// the A/B focuses on vertical mass/tracer consistency rather than a full
+// scalar-form rewrite.
 __global__ void advection_moisture_conservative_kernel(
     const real_t* __restrict__ scalar,
     const real_t* __restrict__ u,
@@ -949,32 +950,17 @@ __global__ void advection_moisture_conservative_kernel(
     double dy_eff = dy / mapfac;
 
     double q_c = (double)scalar[ijk];
-    double q_im = (double)scalar[idx3(i - 1, j, k, nx_h, ny_h)];
-    double q_ip = (double)scalar[idx3(i + 1, j, k, nx_h, ny_h)];
-    double q_jm = (double)scalar[idx3(i, j - 1, k, nx_h, ny_h)];
-    double q_jp = (double)scalar[idx3(i, j + 1, k, nx_h, ny_h)];
     double q_km = (double)scalar[idx3(i, j, k - 1, nx_h, ny_h)];
     double q_kp = (double)scalar[idx3(i, j, k + 1, nx_h, ny_h)];
 
-    double h_c = local_column_depth(terrain, i, j, nx, ny, ztop);
-    double h_im = local_column_depth(terrain, i - 1, j, nx, ny, ztop);
-    double h_ip = local_column_depth(terrain, i + 1, j, nx, ny, ztop);
-    double h_jm = local_column_depth(terrain, i, j - 1, nx, ny, ztop);
-    double h_jp = local_column_depth(terrain, i, j + 1, nx, ny, ztop);
-
     double u_c = (double)u[ijk];
     double v_c = (double)v[ijk];
-    double u_face_hi = 0.5 * (u_c + (double)u[idx3(i + 1, j, k, nx_h, ny_h)]);
-    double u_face_lo = 0.5 * ((double)u[idx3(i - 1, j, k, nx_h, ny_h)] + u_c);
-    double v_face_hi = 0.5 * (v_c + (double)v[idx3(i, j + 1, k, nx_h, ny_h)]);
-    double v_face_lo = 0.5 * ((double)v[idx3(i, j - 1, k, nx_h, ny_h)] + v_c);
-
-    double fx_hi = upwind_face_flux(u_face_hi, h_c * q_c, h_ip * q_ip);
-    double fx_lo = upwind_face_flux(u_face_lo, h_im * q_im, h_c * q_c);
-    double fy_hi = upwind_face_flux(v_face_hi, h_c * q_c, h_jp * q_jp);
-    double fy_lo = upwind_face_flux(v_face_lo, h_jm * q_jm, h_c * q_c);
-    double adv_h = (fx_hi - fx_lo) / (dx_eff * h_c)
-                 + (fy_hi - fy_lo) / (dy_eff * h_c);
+    double adv_x = advect_3rd(u_c,
+        (double)scalar[idx3(i-2,j,k,nx_h,ny_h)], (double)scalar[idx3(i-1,j,k,nx_h,ny_h)],
+        q_c, (double)scalar[idx3(i+1,j,k,nx_h,ny_h)], (double)scalar[idx3(i+2,j,k,nx_h,ny_h)], dx_eff);
+    double adv_y = advect_3rd(v_c,
+        (double)scalar[idx3(i,j-2,k,nx_h,ny_h)], (double)scalar[idx3(i,j-1,k,nx_h,ny_h)],
+        q_c, (double)scalar[idx3(i,j+1,k,nx_h,ny_h)], (double)scalar[idx3(i,j+2,k,nx_h,ny_h)], dy_eff);
 
     double omega_hi = (double)w[idx3w(i, j, k + 1, nx_h, ny_h)];
     double omega_lo = (double)w[idx3w(i, j, k, nx_h, ny_h)];
@@ -983,7 +969,7 @@ __global__ void advection_moisture_conservative_kernel(
     double dz_cell = local_mass_cell_thickness(terrain, eta_w, i, j, k, nx, ztop);
     double adv_z = (fz_hi - fz_lo) / dz_cell;
 
-    scalar_tend[ijk] = (real_t)((double)scalar_tend[ijk] - (adv_h + adv_z));
+    scalar_tend[ijk] = (real_t)((double)scalar_tend[ijk] - (adv_x + adv_y + adv_z));
 }
 
 // ----------------------------------------------------------
