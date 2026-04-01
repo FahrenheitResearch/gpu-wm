@@ -292,13 +292,19 @@ def plot_weather(ncfile, output_dir='plots'):
 
 
 if __name__ == '__main__':
-    if len(sys.argv) < 2:
+    import argparse
+
+    parser = argparse.ArgumentParser(description='Render GPU-WM weather-style panels')
+    parser.add_argument('files', nargs='*', help='NetCDF files to plot (default: output/gpuwm_*.nc)')
+    parser.add_argument('--output-dir', default='plots', help='Directory for rendered weather panels')
+    args = parser.parse_args()
+
+    files = args.files
+    if not files:
         files = sorted(glob.glob('output/gpuwm_*.nc'))
         if not files:
             print('No .nc files found'); sys.exit(1)
-    else:
-        files = sys.argv[1:]
 
     for f in files:
         print(f'Processing {f}...')
-        plot_weather(f)
+        plot_weather(f, output_dir=args.output_dir)

@@ -105,12 +105,13 @@ Good queue items:
 - one hypothesis
 - one run tag
 - one clear log artifact
+- for serious regional runs, include postprocess so the job yields plots as well as NetCDF
 
 Examples:
 
 ```bash
 python tools/run_gate_matrix.py --profile wdamp-erf-pure --cases uniform_120 stretch_120
-python tools/run_fast_case.py --init data/gfs_init_eastpa_20260401_t00z_768x640x50_dx4000_terrain.bin --nx 768 --ny 640 --nz 50 --dx 4000 --dt 8 --ref-lat 40.5 --ref-lon -76.5 --tend 3600 --output-interval 900 --tag eastpa_static_dt8 -- --w-damp --w-damp-alpha 6.0 --w-damp-beta 0.0 --w-transport-blend 1.0
+python tools/run_fast_case.py --postprocess-weather --init data/gfs_init_eastpa_20260401_t00z_768x640x50_dx4000_terrain.bin --nx 768 --ny 640 --nz 50 --dx 4000 --dt 8 --ref-lat 40.5 --ref-lon -76.5 --tend 3600 --output-interval 900 --tag eastpa_static_dt8 -- --w-damp --w-damp-alpha 6.0 --w-damp-beta 0.0 --w-transport-blend 1.0
 ```
 
 Bad queue items:

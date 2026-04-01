@@ -115,6 +115,7 @@ Ops note:
 
 - a real H100 idle gap happened once because the remote queue drained while the watchdog stayed alive
 - the worker system now treats queue underflow as a fault and reseeds from tracked fallback queues instead of letting paid nodes sit idle
+- serious regional runs can now auto-write `verify_all.json`, weather panels, and a collage via `tools/run_fast_case.py --postprocess-weather`
 
 ## Current Drift Diagnosis
 

@@ -10,6 +10,7 @@ This script keeps the iteration loop tight:
 from __future__ import annotations
 
 import argparse
+import json
 import shlex
 import shutil
 import subprocess
@@ -214,6 +215,63 @@ def render_wrf_products(
     return rendered_dirs
 
 
+def load_verify_results(path: Path) -> list[dict]:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    return list(payload.get("results", []))
+
+
+def postprocess_outputs(
+    repo_root: Path,
+    python_exe: str,
+    init_path: Path,
+    run_dir: Path,
+    outputs: list[Path],
+) -> None:
+    verify_json = run_dir / "verify_all.json"
+    weather_dir = run_dir / "plots_weather"
+    collage_dir = run_dir / "plots_collage"
+
+    run_command(
+        [
+            python_exe,
+            "tools/verify_forecast.py",
+            "--reference",
+            str(init_path),
+            "--json-out",
+            str(verify_json),
+            *[str(path) for path in outputs],
+        ],
+        repo_root,
+    )
+
+    run_command(
+        [
+            python_exe,
+            "tools/plot_weather.py",
+            "--output-dir",
+            str(weather_dir),
+            *[str(path) for path in outputs],
+        ],
+        repo_root,
+    )
+
+    verify_results = load_verify_results(verify_json)
+    if verify_results:
+        metrics_path = collage_dir / "last_metrics.json"
+        collage_dir.mkdir(parents=True, exist_ok=True)
+        metrics_path.write_text(json.dumps(verify_results[-1], indent=2), encoding="utf-8")
+    run_command(
+        [
+            python_exe,
+            "tools/plot_pivotal_collage.py",
+            "--output-dir",
+            str(collage_dir),
+            str(outputs[-1]),
+        ],
+        repo_root,
+    )
+
+
 def main() -> int:
     argv_tokens = sys.argv[1:]
 
@@ -299,6 +357,11 @@ def main() -> int:
         "--no-adaptive-stab",
         action="store_true",
         help="Pass --no-adaptive-stab to gpu-wm",
+    )
+    parser.add_argument(
+        "--postprocess-weather",
+        action="store_true",
+        help="Write verify JSON plus weather plots/collage into the run directory after completion",
     )
     parser.add_argument(
         "model_args",
@@ -463,6 +526,15 @@ def main() -> int:
             *[str(path) for path in outputs],
         ]
         run_command(verify_cmd, repo_root)
+
+    if args.postprocess_weather:
+        postprocess_outputs(
+            repo_root=repo_root,
+            python_exe=python_exe,
+            init_path=init_path,
+            run_dir=run_dir,
+            outputs=outputs,
+        )
 
     rendered_dirs: list[Path] = []
     if args.render_wrf_products:
