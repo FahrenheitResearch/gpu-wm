@@ -944,26 +944,38 @@ __global__ void buoyancy_kernel(
 ) {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     int j = blockIdx.y * blockDim.y + threadIdx.y;
-    int k = blockIdx.z * blockDim.z + threadIdx.z;
+    int k_if = blockIdx.z * blockDim.z + threadIdx.z;
 
-    if (i >= nx || j >= ny || k < 1 || k >= nz) return;
+    if (i >= nx || j >= ny || k_if <= 0 || k_if >= nz) return;
 
     int nx_h = nx + 4, ny_h = ny + 4;
-    int ijk = idx3(i, j, k, nx_h, ny_h);
+    int k_lo = k_if - 1;
+    int k_hi = k_if;
+    int ijk_lo = idx3(i, j, k_lo, nx_h, ny_h);
+    int ijk_hi = idx3(i, j, k_hi, nx_h, ny_h);
+    int ijk_w = idx3w(i, j, k_if, nx_h, ny_h);
 
-    double th = (double)theta[ijk];
+    double th = 0.5 * ((double)theta[ijk_lo] + (double)theta[ijk_hi]);
 
-    double th0 = reference_profile_at_local_height(
-        theta_base, z_levels, terrain, eta_m, i, j, k, nx, ny, nz, ztop
+    double th0_lo = reference_profile_at_local_height(
+        theta_base, z_levels, terrain, eta_m, i, j, k_lo, nx, ny, nz, ztop
     );
-
-    double qv_ref = reference_profile_at_local_height(
-        qv_base, z_levels, terrain, eta_m, i, j, k, nx, ny, nz, ztop
+    double th0_hi = reference_profile_at_local_height(
+        theta_base, z_levels, terrain, eta_m, i, j, k_hi, nx, ny, nz, ztop
     );
+    double th0 = 0.5 * (th0_lo + th0_hi);
 
-    double qv_val = fmax((double)qv[ijk], 0.0);
-    double qc_val = fmax((double)qc[ijk], 0.0);
-    double qr_val = fmax((double)qr[ijk], 0.0);
+    double qv_ref_lo = reference_profile_at_local_height(
+        qv_base, z_levels, terrain, eta_m, i, j, k_lo, nx, ny, nz, ztop
+    );
+    double qv_ref_hi = reference_profile_at_local_height(
+        qv_base, z_levels, terrain, eta_m, i, j, k_hi, nx, ny, nz, ztop
+    );
+    double qv_ref = 0.5 * (qv_ref_lo + qv_ref_hi);
+
+    double qv_val = 0.5 * (fmax((double)qv[ijk_lo], 0.0) + fmax((double)qv[ijk_hi], 0.0));
+    double qc_val = 0.5 * (fmax((double)qc[ijk_lo], 0.0) + fmax((double)qc[ijk_hi], 0.0));
+    double qr_val = 0.5 * (fmax((double)qr[ijk_lo], 0.0) + fmax((double)qr[ijk_hi], 0.0));
 
     // Exact coefficient: (Rv/Rd - 1) = (461.6/287.04 - 1) = 0.6078
     constexpr double RVRD_M1 = R_V / R_D - 1.0;
@@ -973,7 +985,7 @@ __global__ void buoyancy_kernel(
                        - qc_val
                        - qr_val);
 
-    w_tend[ijk] = (real_t)((double)w_tend[ijk] + buoy);
+    w_tend[ijk_w] = (real_t)((double)w_tend[ijk_w] + buoy);
 }
 
 // ----------------------------------------------------------
@@ -1137,8 +1149,38 @@ __global__ void rayleigh_damping_kernel(
 // The first term uses only the non-hydrostatic residual (much smaller),
 // dramatically reducing cancellation error over steep terrain.
 // ----------------------------------------------------------
+__device__ inline double contravariant_metric_pg_contribution(
+    const real_t* __restrict__ p_pert,
+    const real_t* __restrict__ rho_ref,
+    const real_t* __restrict__ terrain,
+    const double* __restrict__ eta_m,
+    const double* __restrict__ mapfac_m,
+    int i, int j, int k,
+    int nx, int ny, int nz, int nx_h, int ny_h,
+    double dx, double dy, double ztop
+) {
+    double rho_local = reference_density_from_field(rho_ref, i, j, k, nx_h, ny_h);
+    double inv_rho = 1.0 / rho_local;
+    double mapfac = mapfac_m[j];
+    double dx_eff = dx / mapfac;
+    double dy_eff = dy / mapfac;
+
+    double dpdz = vertical_derivative_mass_field(
+        p_pert, terrain, eta_m, i, j, k, nx, nz, nx_h, ny_h, ztop
+    );
+    double zx = local_metric_slope_x(terrain, eta_m, i, j, k, nx, ny, dx_eff, ztop);
+    double zy = local_metric_slope_y(terrain, eta_m, i, j, k, nx, ny, dy_eff, ztop);
+    double dpdx_eta = ((double)p_pert[idx3(i+1,j,k,nx_h,ny_h)] -
+                       (double)p_pert[idx3(i-1,j,k,nx_h,ny_h)]) / (2.0*dx_eff);
+    double dpdy_eta = ((double)p_pert[idx3(i,j+1,k,nx_h,ny_h)] -
+                       (double)p_pert[idx3(i,j-1,k,nx_h,ny_h)]) / (2.0*dy_eff);
+    double dpdx = dpdx_eta - zx * dpdz;
+    double dpdy = dpdy_eta - zy * dpdz;
+    return inv_rho * (zx * dpdx + zy * dpdy);
+}
+
 __global__ void pressure_gradient_kernel(
-    real_t* __restrict__ u_tend, real_t* __restrict__ v_tend, real_t* __restrict__ w_tend,
+    real_t* __restrict__ u_tend, real_t* __restrict__ v_tend,
     const real_t* __restrict__ p_pert,
     const real_t* __restrict__ rho_ref,
     const real_t* __restrict__ terrain,
@@ -1179,9 +1221,36 @@ __global__ void pressure_gradient_kernel(
     u_tend[ijk] = (real_t)((double)u_tend[ijk] - inv_rho * dpdx);
     v_tend[ijk] = (real_t)((double)v_tend[ijk] - inv_rho * dpdy);
 
-    // Contravariant w tendency: -(zx * du/dt_PG + zy * dv/dt_PG)
-    //   = inv_rho * (zx * dpdx + zy * dpdy)
-    w_tend[ijk] = (real_t)((double)w_tend[ijk] + inv_rho * (zx * dpdx + zy * dpdy));
+}
+
+__global__ void pressure_metric_w_interface_kernel(
+    real_t* __restrict__ w_tend,
+    const real_t* __restrict__ p_pert,
+    const real_t* __restrict__ rho_ref,
+    const real_t* __restrict__ terrain,
+    const double* __restrict__ eta_m,
+    const double* __restrict__ mapfac_m,
+    int nx, int ny, int nz, double dx, double dy, double ztop
+) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    int j = blockIdx.y * blockDim.y + threadIdx.y;
+    int k_if = blockIdx.z * blockDim.z + threadIdx.z;
+    if (i >= nx || j >= ny || k_if <= 0 || k_if >= nz) return;
+
+    int nx_h = nx + 4;
+    int ny_h = ny + 4;
+    int ijk_w = idx3w(i, j, k_if, nx_h, ny_h);
+
+    double pg_lo = contravariant_metric_pg_contribution(
+        p_pert, rho_ref, terrain, eta_m, mapfac_m,
+        i, j, k_if - 1, nx, ny, nz, nx_h, ny_h, dx, dy, ztop
+    );
+    double pg_hi = contravariant_metric_pg_contribution(
+        p_pert, rho_ref, terrain, eta_m, mapfac_m,
+        i, j, k_if, nx, ny, nz, nx_h, ny_h, dx, dy, ztop
+    );
+
+    w_tend[ijk_w] = (real_t)((double)w_tend[ijk_w] + 0.5 * (pg_lo + pg_hi));
 }
 
 __global__ void acoustic_vertical_pg_kernel(
@@ -1856,8 +1925,12 @@ void compute_tendencies(StateGPU& state, const GridConfig& grid,
 
     // Pressure gradient force (from current p')
     pressure_gradient_kernel<<<grid3d, block>>>(
-        state.u_tend, state.v_tend, state.w_tend,
+        state.u_tend, state.v_tend,
         state.p, state.rho,
+        state.terrain, state.eta_m, grid.mapfac_m,
+        nx, ny, nz, grid.dx, grid.dy, grid.ztop);
+    pressure_metric_w_interface_kernel<<<grid3d_w, block>>>(
+        state.w_tend, state.p, state.rho,
         state.terrain, state.eta_m, grid.mapfac_m,
         nx, ny, nz, grid.dx, grid.dy, grid.ztop);
 
@@ -1886,7 +1959,7 @@ void compute_tendencies(StateGPU& state, const GridConfig& grid,
         state.terrain, state.eta_m, grid.mapfac_m, nx, ny, nz, grid.dx, grid.dy, grid.ztop);
 
     // Buoyancy
-    buoyancy_kernel<<<grid3d, block>>>(
+    buoyancy_kernel<<<grid3d_w, block>>>(
         state.theta, state.theta_base, state.qv_base, state.z_levels,
         state.qv, state.qc, state.qr,
         state.w_tend, state.terrain, state.eta_m, nx, ny, nz, grid.ztop);
