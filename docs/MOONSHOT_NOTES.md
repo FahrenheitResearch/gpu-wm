@@ -258,6 +258,96 @@ Skeptical note:
 - Very plausible for this codebase.
 - Harder to keep deterministic and easy to reason about.
 
+## Fresh Agent Findings
+
+### A. Conservative Moisture Transport First, Not Full Scalar Rewrite
+
+Category: solver correctness
+
+New recommendation:
+
+- do not touch `theta` first
+- add a moisture-only conservative transport experiment for `qv`, `qc`, and `qr`
+- keep it aligned with the same transformed divergence skeleton already trusted by `pressure_update_kernel()`
+
+Why this rose in priority:
+
+- regional drift diagnostics now show large interior `qtot` loss while the outer relaxation band is much less severe
+- that points more strongly at scalar/tracer inconsistency than at another boundary-only fix
+- the existing scalar kernel still advects in a form that does not match the transformed continuity path the model now uses for air mass
+
+Smallest branch:
+
+- `exp/moisture-conservative-transport`
+- add a `conservative_moisture_transport` switch
+- only replace `qv/qc/qr` launches
+- leave `theta` on the current kernel for the first pass
+
+Fast falsification:
+
+- `stretch_120`
+- `stretch_900`
+- eastern Pennsylvania static `+1 h`
+
+Keep only if:
+
+- interior `qtot_d` improves materially
+- `QV` RMSE does not regress
+- `THETA` and `mean|w|` stay neutral-to-better
+
+### B. Do Not Fake Lateral `p-w` Characteristics; Radiate `p` First
+
+Category: solver correctness
+
+New recommendation:
+
+- the smallest meaningful boundary experiment is **pressure-only** radiative treatment in the fast acoustic refresh
+- do not start with a fake lateral `p-w` characteristic pair
+
+Why:
+
+- on lateral faces, the physically relevant acoustic pairing is `p` with the **boundary-normal horizontal velocity**, not contravariant `w`
+- that makes a “pressure-only Orlanski-style fast refresh” the cleanest first branch
+
+Smallest branch:
+
+- `exp/fast-p-radbc`
+- modify only fast `p` refresh in `run_vertical_acoustic_substeps()`
+- keep lateral `w` unchanged for the first prototype
+
+Expected signal:
+
+- less outer-strip `p'` ringing
+- smaller static vs boundary-forced gap on the eastern Pennsylvania `+1 h` case
+
+### C. Columnwise Semi-Implicit Vertical Acoustic `p-w` Corrector
+
+Category: solver correctness
+
+New recommendation:
+
+- the most credible “bigger than tuning” moonshot is now a one-thread-per-column semi-implicit solve for the vertical acoustic `p-w` pair
+- structurally reuse the Thomas-solver pattern already present in the PBL
+
+Why it remains attractive:
+
+- it directly targets the stiffest remaining vertical coupling
+- it is still local enough to prototype in days, not months
+- if it works, it could reduce dependence on strong `w_damp`
+
+Prototype shape:
+
+- new flag: `--pw-column-corrector`
+- branch inside `run_vertical_acoustic_substeps()`
+- solve cell-centered `p` implicitly per column, then recover interface `w`
+- keep the current divergence filter and current open-fast boundary refresh on the first prototype
+
+Keep only if:
+
+- canonical gates stay inside the current envelope
+- eastern Pennsylvania `+1 h` materially improves
+- runtime overhead stays modest
+
 ### 7. Diagnose Nonzero Startup `qc/qr` from Relative Humidity and Lift
 
 Category: physics realism / initialization

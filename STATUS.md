@@ -116,6 +116,7 @@ Ops note:
 - a real H100 idle gap happened once because the remote queue drained while the watchdog stayed alive
 - the worker system now treats queue underflow as a fault and reseeds from tracked fallback queues instead of letting paid nodes sit idle
 - serious regional runs can now auto-write `verify_all.json`, weather panels, and a collage via `tools/run_fast_case.py --postprocess-weather`
+- `tools/run_fast_case.py` no longer hard-requires a GRIB file when an explicit existing `--init` is being reused without `--regen-init`; this matters for staging prebuilt regional binaries on rented workers and then launching runs directly
 
 ## Current Drift Diagnosis
 
@@ -145,6 +146,20 @@ Most likely current blocker order:
 4. startup imbalance, now lower priority than the interior drift
 
 That means the next high-value implementation target is still dycore correctness, not new physics.
+
+## Fresh Moonshot Directions
+
+Three fresh moonshot reviews are now concrete enough to test, in this order:
+
+1. conservative moisture transport only for `qv/qc/qr`
+   - rationale: current regional `qtot` loss is much more consistent with a scalar transport/operator mismatch than a boundary leak
+   - smallest branch: leave `theta` alone, add a moisture-only conservative transport kernel aligned with the transformed continuity skeleton already used by pressure
+2. pressure-only radiative fast open boundary
+   - rationale: if a boundary experiment is going to matter, the cleanest first try is to make `p` less reflective during the fast acoustic refresh, not to fake a lateral `p-w` characteristic pair
+   - smallest branch: fast-step `p` strip-history / Orlanski-style radiation only; leave lateral `w` unchanged at first
+3. columnwise semi-implicit vertical acoustic `p-w` corrector
+   - rationale: the smallest serious numerics jump that could beat another damping sweep is a one-thread-per-column tridiagonal solve for the stiff vertical acoustic pair
+   - this is larger than the first two ideas and should stay behind them unless the smaller transport/boundary experiments flatline
 
 ## Immediate Next Work
 
