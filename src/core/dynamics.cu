@@ -1066,6 +1066,47 @@ __global__ void diffusion_kernel(
     tend[ijk] = (real_t)result;
 }
 
+__global__ void diffusion_w_interface_kernel(
+    const real_t* __restrict__ w, real_t* __restrict__ w_tend,
+    const real_t* __restrict__ terrain,
+    const double* __restrict__ eta_w,
+    const double* __restrict__ mapfac_m,
+    int nx, int ny, int nz, double dx, double dy,
+    double ztop, double kdiff_h, double kdiff_v
+) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    int j = blockIdx.y * blockDim.y + threadIdx.y;
+    int k_if = blockIdx.z * blockDim.z + threadIdx.z;
+    if (i >= nx || j >= ny || k_if <= 0 || k_if >= nz) return;
+
+    int nx_h = nx + 4;
+    int ny_h = ny + 4;
+    int ijk_w = idx3w(i, j, k_if, nx_h, ny_h);
+
+    double w_c = (double)w[ijk_w];
+    double w_ip = (double)w[idx3w(i + 1, j, k_if, nx_h, ny_h)];
+    double w_im = (double)w[idx3w(i - 1, j, k_if, nx_h, ny_h)];
+    double w_jp = (double)w[idx3w(i, j + 1, k_if, nx_h, ny_h)];
+    double w_jm = (double)w[idx3w(i, j - 1, k_if, nx_h, ny_h)];
+
+    double mapfac = mapfac_m ? mapfac_m[j] : 1.0;
+    double dx_eff = dx / mapfac;
+    double dy_eff = dy / mapfac;
+
+    double result = (double)w_tend[ijk_w]
+        + kdiff_h * ((w_ip - 2.0 * w_c + w_im) / (dx_eff * dx_eff)
+                   + (w_jp - 2.0 * w_c + w_jm) / (dy_eff * dy_eff));
+
+    if (k_if > 0 && k_if < nz) {
+        double w_kp = (double)w[idx3w(i, j, k_if + 1, nx_h, ny_h)];
+        double w_km = (double)w[idx3w(i, j, k_if - 1, nx_h, ny_h)];
+        double dz = local_centered_interface_dz(terrain, eta_w, i, j, k_if, nx, ztop);
+        result += kdiff_v * (w_kp - 2.0 * w_c + w_km) / (dz * dz);
+    }
+
+    w_tend[ijk_w] = (real_t)result;
+}
+
 __global__ void w_vertical_cfl_damping_kernel(
     const real_t* __restrict__ w,
     real_t* __restrict__ w_tend,
@@ -1100,7 +1141,7 @@ __global__ void w_vertical_cfl_damping_kernel(
 // Rayleigh damping near model top
 // ----------------------------------------------------------
 __global__ void rayleigh_damping_kernel(
-    real_t* __restrict__ u, real_t* __restrict__ v, real_t* __restrict__ w,
+    real_t* __restrict__ u, real_t* __restrict__ v,
     real_t* __restrict__ theta, real_t* __restrict__ p_pert,
     const real_t* __restrict__ terrain,
     const double* __restrict__ eta_m,
@@ -1123,9 +1164,33 @@ __global__ void rayleigh_damping_kernel(
     double theta_ref = reference_profile_at_local_height(
         theta_base, z_levels, terrain, eta_m, i, j, k, nx, ny, nz, ztop
     );
-    w[ijk] = (real_t)((double)w[ijk] * decay);
     p_pert[ijk] = (real_t)((double)p_pert[ijk] * decay);
     theta[ijk] = (real_t)(theta_ref + ((double)theta[ijk] - theta_ref) * decay);
+}
+
+__global__ void rayleigh_damping_w_interface_kernel(
+    real_t* __restrict__ w,
+    const real_t* __restrict__ terrain,
+    const double* __restrict__ eta_w,
+    int nx, int ny, int nz, double ztop, double dt
+) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    int j = blockIdx.y * blockDim.y + threadIdx.y;
+    int k_if = blockIdx.z * blockDim.z + threadIdx.z;
+    if (i >= nx || j >= ny || k_if <= 0 || k_if >= nz) return;
+
+    int nx_h = nx + 4;
+    int ny_h = ny + 4;
+    int ijk_w = idx3w(i, j, k_if, nx_h, ny_h);
+    double terrain_val = clamped_column_terrain(terrain, i, j, nx, ztop);
+    double z = terrain_following_height(terrain_val, eta_w[k_if], ztop);
+    double z_damp = ztop * 0.75;
+    if (z <= z_damp) return;
+
+    double frac = (z - z_damp) / (ztop - z_damp);
+    double alpha = 0.2 * sin(frac * PI * 0.5) * sin(frac * PI * 0.5);
+    double decay = 1.0 / (1.0 + alpha * dt);
+    w[ijk_w] = (real_t)((double)w[ijk_w] * decay);
 }
 
 // ----------------------------------------------------------
@@ -1364,7 +1429,6 @@ __global__ void pressure_divergence_filter_kernel(
 __global__ void sanitize_prognostic_state_kernel(
     real_t* __restrict__ u,
     real_t* __restrict__ v,
-    real_t* __restrict__ w,
     real_t* __restrict__ theta,
     real_t* __restrict__ qv,
     real_t* __restrict__ qc,
@@ -1386,11 +1450,6 @@ __global__ void sanitize_prognostic_state_kernel(
     int nx_h = nx + 4;
     int ny_h = ny + 4;
     int ijk = idx3(i, j, k, nx_h, ny_h);
-
-    // Sanitize w at mass level k
-    double w_val = (double)w[ijk];
-    if (!isfinite(w_val)) w_val = 0.0;
-    w[ijk] = (real_t)w_val;
 
     {
 
@@ -1435,6 +1494,29 @@ __global__ void sanitize_prognostic_state_kernel(
         qr[ijk] = (real_t)qr_val;
         p_pert[ijk] = (real_t)p_val;
     }
+}
+
+__global__ void sanitize_w_interface_kernel(
+    real_t* __restrict__ w,
+    int nx, int ny, int nz
+) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    int j = blockIdx.y * blockDim.y + threadIdx.y;
+    int k_if = blockIdx.z * blockDim.z + threadIdx.z;
+    if (i >= nx || j >= ny || k_if > nz) return;
+
+    int nx_h = nx + 4;
+    int ny_h = ny + 4;
+    int ijk_w = idx3w(i, j, k_if, nx_h, ny_h);
+
+    if (k_if == 0 || k_if == nz) {
+        w[ijk_w] = (real_t)0.0;
+        return;
+    }
+
+    double w_val = (double)w[ijk_w];
+    if (!isfinite(w_val)) w_val = 0.0;
+    w[ijk_w] = (real_t)w_val;
 }
 
 __global__ void zero_field_kernel(real_t* __restrict__ field, int n_total) {
@@ -1773,12 +1855,14 @@ void run_vertical_acoustic_substeps(
 void sanitize_prognostic_state(StateGPU& state, const GridConfig& grid) {
     dim3 block(8, 8, 4);
     dim3 grid3d((grid.nx + 7) / 8, (grid.ny + 7) / 8, (grid.nz + 3) / 4);
+    dim3 grid3d_w((grid.nx + 7) / 8, (grid.ny + 7) / 8, ((grid.nz + 1) + 3) / 4);
     sanitize_prognostic_state_kernel<<<grid3d, block>>>(
-        state.u, state.v, state.w,
+        state.u, state.v,
         state.theta, state.qv, state.qc, state.qr, state.p,
         state.theta_base, state.p_base, state.z_levels, state.terrain, state.eta_m,
         grid.nx, grid.ny, grid.nz, grid.ztop
     );
+    sanitize_w_interface_kernel<<<grid3d_w, block>>>(state.w, grid.nx, grid.ny, grid.nz);
 }
 
 void convert_w_to_contravariant(StateGPU& state, const GridConfig& grid) {
@@ -1977,7 +2061,7 @@ void compute_tendencies(StateGPU& state, const GridConfig& grid,
         nx, ny, nz, grid.dx, grid.dy, grid.ztop, kdiff_h, kdiff_v);
     diffusion_kernel<<<grid3d, block>>>(state.v, state.v_tend, state.terrain, state.eta_m, grid.mapfac_m,
         nx, ny, nz, grid.dx, grid.dy, grid.ztop, kdiff_h, kdiff_v);
-    diffusion_kernel<<<grid3d, block>>>(state.w, state.w_tend, state.terrain, state.eta_m, grid.mapfac_m,
+    diffusion_w_interface_kernel<<<grid3d_w, block>>>(state.w, state.w_tend, state.terrain, state.eta, grid.mapfac_m,
         nx, ny, nz, grid.dx, grid.dy, grid.ztop, kdiff_h, kdiff_v * 0.5);
     diffusion_kernel<<<grid3d, block>>>(state.theta, state.theta_tend, state.terrain, state.eta_m, grid.mapfac_m,
         nx, ny, nz, grid.dx, grid.dy, grid.ztop, kdiff_h * 0.1, 0.0);
@@ -2018,6 +2102,7 @@ void rk3_step(StateGPU& state, StateGPU& state_old, StateGPU& state_init,
 
     dim3 block(8,8,4);
     dim3 grid3d((nx+7)/8,(ny+7)/8,(nz+3)/4);
+    dim3 grid3d_w((nx+7)/8,(ny+7)/8,((nz+1)+3)/4);
 
     // Ensure the current RK state has the correct halos before stencil work.
     apply_stage_boundaries(state, state_init, grid, use_open_bc, relax_width);
@@ -2080,9 +2165,12 @@ void rk3_step(StateGPU& state, StateGPU& state_old, StateGPU& state_init,
 
     // 4. Rayleigh damping near model top (critical for stability)
     rayleigh_damping_kernel<<<grid3d, block>>>(
-        state.u, state.v, state.w, state.theta,
+        state.u, state.v, state.theta,
         state.p, state.terrain, state.eta_m, state.theta_base, state.z_levels,
         nx, ny, nz, grid.ztop, dt_rk
+    );
+    rayleigh_damping_w_interface_kernel<<<grid3d_w, block>>>(
+        state.w, state.terrain, state.eta, nx, ny, nz, grid.ztop, dt_rk
     );
 
     // Final BCs
