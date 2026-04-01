@@ -131,12 +131,16 @@ Evidence from the eastern Pennsylvania `+1 h` case:
 - new regional band diagnostics in `tools/verify_forecast.py` show the current `dt=8`, `alpha=6.0` case loses much more moisture in the interior than in the outer 20-cell band:
   - `outer_20 qtot_d = -7.37%`
   - `interior qtot_d = -24.92%`
+- new terrain-band diagnostics show the moisture loss is not concentrated on the highest terrain:
+  - interior low-to-mid terrain quartiles (`zbar ~ 0 / 38 / 198 m`) lose `-28.53% / -35.88% / -30.29%` `qtot`
+  - highest-terrain interior quartile (`zbar ~ 404 m`) has the worst `THETA` drift and `|w|`, but only `-0.84%` `qtot` drift
+  - interpretation: thermal/w error is strongly terrain-coupled, but the moisture-loss mechanism looks more like interior scalar transport / tracer inconsistency than a simple steep-slope moisture leak
 - startup-balanced `w` changes the initial state and startup diagnostics, but has not yet separated the `+1 h` metrics strongly on the tested `dt=8`, `alpha=8.0` case
 
 Most likely current blocker order:
 
 1. remaining slow-path `w` kernels that still behave like mass-level operators over terrain
-2. scalar/moisture transport drift, especially domain `qtot` loss on regional runs
+2. scalar/moisture transport drift, especially domain `qtot` loss on regional runs; this now points first at `advection_scalar_kernel()` vertical/tracer consistency rather than another steep-terrain boundary tweak
 3. contradictory boundary / sponge semantics, now secondary at `+1 h` but still wrong
 4. startup imbalance, now lower priority than the interior drift
 

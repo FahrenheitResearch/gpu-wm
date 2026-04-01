@@ -75,6 +75,10 @@ def load_netcdf_state(path: str) -> Dict[str, np.ndarray]:
         "QC": np.array(ds.variables["QC"][:], dtype=np.float64),
         "QR": np.array(ds.variables["QR"][:], dtype=np.float64),
     }
+    if "TERRAIN" in ds.variables:
+        data["terrain"] = np.array(ds.variables["TERRAIN"][:], dtype=np.float64)
+    if "TERRAIN_SLOPE" in ds.variables:
+        data["terrain_slope"] = np.array(ds.variables["TERRAIN_SLOPE"][:], dtype=np.float64)
     ds.close()
     return data
 
@@ -148,8 +152,8 @@ def load_init_binary_state(path: str) -> Dict[str, np.ndarray]:
                 raw = f.read(nx * ny * 8)
                 if len(raw) != nx * ny * 8:
                     raise RuntimeError("Binary init file has truncated terrain trailer")
-                # Terrain is optional metadata; keep lightweight stats instead of duplicating the array.
-                terrain = np.frombuffer(raw, dtype=np.float64)
+                terrain = np.frombuffer(raw, dtype=np.float64).reshape(ny, nx).copy()
+                data["terrain"] = terrain
                 data["terrain_stats"] = {
                     "min": float(np.min(terrain)),
                     "max": float(np.max(terrain)),
@@ -269,45 +273,110 @@ def compute_regional_band_metrics(
     mask2d_outer[:, -outer_band:] = True
     mask2d_inner = ~mask2d_outer
 
-    qtot_fcst = fcst["QV"] + fcst["QC"] + fcst["QR"]
-    qtot_ref = ref["QV"] + ref["QC"] + ref["QR"]
     eps = 1.0e-12
 
     def band_metrics(mask2d: np.ndarray) -> Dict[str, float]:
-        mask3d = np.broadcast_to(mask2d[np.newaxis, :, :], fcst["THETA"].shape)
-        fcst_u = fcst["U"][mask3d]
-        ref_u = ref["U"][mask3d]
-        fcst_v = fcst["V"][mask3d]
-        ref_v = ref["V"][mask3d]
-        fcst_th = fcst["THETA"][mask3d]
-        ref_th = ref["THETA"][mask3d]
-        fcst_qv = fcst["QV"][mask3d]
-        ref_qv = ref["QV"][mask3d]
-        fcst_w = fcst["W"][mask3d]
-        qtot_f = qtot_fcst[mask3d]
-        qtot_r = qtot_ref[mask3d]
-
-        qtot_ref_sum = float(np.sum(qtot_r))
-        qtot_fcst_sum = float(np.sum(qtot_f))
-        return {
-            "cells": int(mask3d.sum()),
-            "u_rmse": float(np.sqrt(np.mean((fcst_u - ref_u) ** 2))),
-            "v_rmse": float(np.sqrt(np.mean((fcst_v - ref_v) ** 2))),
-            "theta_rmse": float(np.sqrt(np.mean((fcst_th - ref_th) ** 2))),
-            "qv_rmse": float(np.sqrt(np.mean((fcst_qv - ref_qv) ** 2))),
-            "theta_bias": float(np.mean(fcst_th - ref_th)),
-            "mean_w": float(np.mean(fcst_w)),
-            "mean_abs_w": float(np.mean(np.abs(fcst_w))),
-            "max_abs_w": float(np.max(np.abs(fcst_w))),
-            "qtot_reference_sum": qtot_ref_sum,
-            "qtot_forecast_sum": qtot_fcst_sum,
-            "qtot_rel_change_pct": float(100.0 * (qtot_fcst_sum - qtot_ref_sum) / max(abs(qtot_ref_sum), eps)),
-        }
+        return compute_mask_metrics(fcst, ref, mask2d, eps)
 
     return {
         f"outer_{outer_band}": band_metrics(mask2d_outer),
         "interior": band_metrics(mask2d_inner),
     }
+
+
+def compute_mask_metrics(
+    fcst: Dict[str, np.ndarray],
+    ref: Dict[str, np.ndarray],
+    mask2d: np.ndarray,
+    eps: float = 1.0e-12,
+) -> Dict[str, float]:
+    qtot_fcst = fcst["QV"] + fcst["QC"] + fcst["QR"]
+    qtot_ref = ref["QV"] + ref["QC"] + ref["QR"]
+
+    mask3d = np.broadcast_to(mask2d[np.newaxis, :, :], fcst["THETA"].shape)
+    fcst_u = fcst["U"][mask3d]
+    ref_u = ref["U"][mask3d]
+    fcst_v = fcst["V"][mask3d]
+    ref_v = ref["V"][mask3d]
+    fcst_th = fcst["THETA"][mask3d]
+    ref_th = ref["THETA"][mask3d]
+    fcst_qv = fcst["QV"][mask3d]
+    ref_qv = ref["QV"][mask3d]
+    fcst_w = fcst["W"][mask3d]
+    qtot_f = qtot_fcst[mask3d]
+    qtot_r = qtot_ref[mask3d]
+
+    qtot_ref_sum = float(np.sum(qtot_r))
+    qtot_fcst_sum = float(np.sum(qtot_f))
+    return {
+        "cells": int(mask3d.sum()),
+        "u_rmse": float(np.sqrt(np.mean((fcst_u - ref_u) ** 2))),
+        "v_rmse": float(np.sqrt(np.mean((fcst_v - ref_v) ** 2))),
+        "theta_rmse": float(np.sqrt(np.mean((fcst_th - ref_th) ** 2))),
+        "qv_rmse": float(np.sqrt(np.mean((fcst_qv - ref_qv) ** 2))),
+        "theta_bias": float(np.mean(fcst_th - ref_th)),
+        "mean_w": float(np.mean(fcst_w)),
+        "mean_abs_w": float(np.mean(np.abs(fcst_w))),
+        "max_abs_w": float(np.max(np.abs(fcst_w))),
+        "qtot_reference_sum": qtot_ref_sum,
+        "qtot_forecast_sum": qtot_fcst_sum,
+        "qtot_rel_change_pct": float(100.0 * (qtot_fcst_sum - qtot_ref_sum) / max(abs(qtot_ref_sum), eps)),
+    }
+
+
+def compute_terrain_band_metrics(
+    fcst: Dict[str, np.ndarray],
+    ref: Dict[str, np.ndarray],
+    outer_band: int,
+) -> Dict[str, object]:
+    terrain = fcst.get("terrain")
+    if terrain is None:
+        terrain = ref.get("terrain")
+    if terrain is None:
+        return {}
+
+    nx = int(fcst["nx"])
+    ny = int(fcst["ny"])
+    eps = 1.0e-12
+    if terrain.shape != (ny, nx):
+        return {}
+
+    mask2d_outer = np.zeros((ny, nx), dtype=bool)
+    if outer_band > 0 and outer_band * 2 < nx and outer_band * 2 < ny:
+        mask2d_outer[:outer_band, :] = True
+        mask2d_outer[-outer_band:, :] = True
+        mask2d_outer[:, :outer_band] = True
+        mask2d_outer[:, -outer_band:] = True
+    mask2d_inner = ~mask2d_outer if outer_band > 0 else np.ones((ny, nx), dtype=bool)
+
+    results: Dict[str, object] = {}
+    for region_name, region_mask in (("domain", np.ones((ny, nx), dtype=bool)), ("interior", mask2d_inner)):
+        terrain_vals = terrain[region_mask]
+        if terrain_vals.size < 4:
+            continue
+        cuts = np.percentile(terrain_vals, [25.0, 50.0, 75.0])
+        band_defs = [
+            ("q1", terrain <= cuts[0]),
+            ("q2", (terrain > cuts[0]) & (terrain <= cuts[1])),
+            ("q3", (terrain > cuts[1]) & (terrain <= cuts[2])),
+            ("q4", terrain > cuts[2]),
+        ]
+        region_info: Dict[str, object] = {
+            "terrain_cut_percentiles_m": [float(x) for x in cuts],
+            "bands": {},
+        }
+        for band_name, band_mask in band_defs:
+            full_mask = region_mask & band_mask
+            if not np.any(full_mask):
+                continue
+            metrics = compute_mask_metrics(fcst, ref, full_mask, eps)
+            metrics["terrain_mean_m"] = float(np.mean(terrain[full_mask]))
+            metrics["terrain_min_m"] = float(np.min(terrain[full_mask]))
+            metrics["terrain_max_m"] = float(np.max(terrain[full_mask]))
+            region_info["bands"][band_name] = metrics
+        results[region_name] = region_info
+
+    return results
 
 
 def evaluate_flags(
@@ -376,6 +445,10 @@ def summarize_case(
     if band_metrics:
         summary["regional_bands"] = band_metrics
 
+    terrain_band_metrics = compute_terrain_band_metrics(fcst, ref, outer_band)
+    if terrain_band_metrics:
+        summary["terrain_bands"] = terrain_band_metrics
+
     summary["flags"] = evaluate_flags(summary["health"], ref_health)
     return summary
 
@@ -441,6 +514,28 @@ def print_summary(summary: Dict[str, object]) -> None:
                 f"mean|w|={band['mean_abs_w']:.3f}  "
                 f"qtot_d={band['qtot_rel_change_pct']:+.2f}%"
             )
+
+    terrain_bands = summary.get("terrain_bands")
+    if terrain_bands:
+        for region_name in ("interior", "domain"):
+            region = terrain_bands.get(region_name)
+            if not region:
+                continue
+            cuts = region["terrain_cut_percentiles_m"]
+            print(
+                f"  terrain-{region_name} cuts="
+                f"{cuts[0]:.0f}/{cuts[1]:.0f}/{cuts[2]:.0f} m"
+            )
+            for band_name in ("q1", "q2", "q3", "q4"):
+                band = region["bands"].get(band_name)
+                if not band:
+                    continue
+                print(
+                    f"    {band_name:2s} zbar={band['terrain_mean_m']:.0f} m  "
+                    f"TH rmse={band['theta_rmse']:.2f}  "
+                    f"mean|w|={band['mean_abs_w']:.3f}  "
+                    f"qtot_d={band['qtot_rel_change_pct']:+.2f}%"
+                )
 
     flags = summary["flags"]
     if flags:
