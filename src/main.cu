@@ -366,7 +366,7 @@ int main(int argc, char** argv) {
             printf("  --w-damp-beta B     w damping activation CFL (default: 1.0)\n");
             printf("  --w-transport-blend B  Blend legacy and ERF-style w transport (0..1, default: 1.0)\n");
             printf("  --w-transport-diagnostics  Print interval diagnostics for old/new w transport terms\n");
-            printf("  --test N            Idealized test: 1=bubble 2=density-current 3=convection\n\n");
+            printf("  --test N            Idealized test: 1=bubble 2=density-current 3=convection 4=free-stream-terrain\n\n");
             printf("Operational:\n");
             printf("  --hrrr              Full HRRR CONUS domain (1799x1059 @ 3km)\n");
             printf("  --conus-test        Test CONUS domain (512x512 @ 3km)\n");
@@ -643,7 +643,7 @@ int main(int argc, char** argv) {
 
         // Physics
         // Microphysics: run for convective tests and GFS (which has moisture)
-        if (cfg.test_case >= 3 || gfs_mode) {
+        if (cfg.test_case == 3 || gfs_mode) {
             if (use_thompson) {
                 run_microphysics_thompson(state, grid, dt);
             } else {
@@ -652,7 +652,7 @@ int main(int argc, char** argv) {
         }
 
         // PBL: implicit vertical diffusion + surface layer
-        if (cfg.test_case >= 3 || gfs_mode) {
+        if (cfg.test_case == 3 || gfs_mode) {
             run_pbl(state, grid, z0, theta_sfc, qv_sfc, cs_smag, dt);
         }
 

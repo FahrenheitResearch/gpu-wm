@@ -206,6 +206,32 @@ void init_base_state(StateGPU& state, const GridConfig& grid) {
 // ----------------------------------------------------------
 // Initialize fields kernel
 // ----------------------------------------------------------
+__global__ void init_terrain_kernel(
+    real_t* __restrict__ terrain,
+    int nx, int ny,
+    double dx, double dy,
+    int test_case
+) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    int j = blockIdx.y * blockDim.y + threadIdx.y;
+    if (i >= nx || j >= ny) return;
+
+    double terrain_val = 0.0;
+    if (test_case == 4) {
+        double x = (i - nx / 2.0) * dx;
+        double y = (j - ny / 2.0) * dy;
+        double rx = 25000.0;
+        double ry = 25000.0;
+        double r = sqrt((x * x) / (rx * rx) + (y * y) / (ry * ry));
+        if (r < 1.0) {
+            double env = cos(0.5 * PI * r);
+            terrain_val = 750.0 * env * env;
+        }
+    }
+
+    terrain[idx2(i, j, nx)] = (real_t)terrain_val;
+}
+
 __global__ void init_fields_kernel(
     real_t* __restrict__ theta,
     real_t* __restrict__ u,
@@ -222,7 +248,7 @@ __global__ void init_fields_kernel(
     const double* __restrict__ z_levels,
     int nx, int ny, int nz,
     double dx, double dy,
-    int test_case  // 0=quiescent, 1=thermal bubble, 2=density current, 3=supercell
+    int test_case  // 0=quiescent, 1=thermal bubble, 2=density current, 3=supercell, 4=free-stream terrain
 ) {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     int j = blockIdx.y * blockDim.y + threadIdx.y;
@@ -333,6 +359,12 @@ __global__ void init_fields_kernel(
 
         qv_val = fmax(qv_val, 0.0);
     }
+    else if (test_case == 4) {
+        // --- Uniform flow over analytic terrain ---
+        u_val = 20.0;
+        v_val = 0.0;
+        qv_val = 0.0;
+    }
 
     // Write as real_t
     theta[ijk] = (real_t)th_val;
@@ -362,6 +394,12 @@ void initialize_model(StateGPU& state, GridConfig& grid, int test_case) {
 
     // Initialize base state
     init_base_state(state, grid);
+
+    dim3 block2d(16, 16);
+    dim3 grid2d((grid.nx + 15) / 16, (grid.ny + 15) / 16);
+    init_terrain_kernel<<<grid2d, block2d>>>(
+        state.terrain, grid.nx, grid.ny, grid.dx, grid.dy, test_case
+    );
 
     // Initialize fields
     int nx_h = grid.nx + 4;
