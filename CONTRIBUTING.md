@@ -89,7 +89,7 @@ Success is not "the plot looks okay." Track:
 
 The stretched case should move toward the uniform case, not away from it.
 
-Current branch-level gate runner:
+Current gate runner on `main`:
 
 ```bash
 python3 tools/run_gate_matrix.py --profile wdamp --include-6h
@@ -115,6 +115,18 @@ while keeping the short uniform gate inside the current threshold envelope.
 As of `2026-03-31`, `--w-damp-alpha 7.0 --w-damp-beta 0.0` improves the 120 s
 smokes but fails the stretched 15 min / 1 h gates, so keep the canonical
 profile at `6.0 / 0.0` until the dycore is stronger.
+
+Free-stream-over-terrain regression:
+
+```bash
+python3 tools/run_freestream_terrain.py --tend 900 -- \
+  --w-damp --w-damp-alpha 6.0 --w-damp-beta 0.0 \
+  --w-transport-blend 1.0
+```
+
+Use that case to measure spurious terrain-generated `w` and mean-flow drift in
+a clean periodic dynamics-only setup. Compare `--w-transport-blend 0.0` vs
+`1.0` before claiming a terrain-transport change is a real geometry fix.
 
 ## Precision Stance
 
