@@ -272,10 +272,10 @@ void apply_open_boundaries(StateGPU& state, StateGPU& state_init,
     dim3 grid_jk_w((ny + 15) / 16, ((nz + 1) + 15) / 16);
     dim3 grid_ik_w((nx + 15) / 16, ((nz + 1) + 15) / 16);
 
-    // Relax only the materially advected mass-level fields plus interface w.
-    // Pressure perturbation is allowed to adjust more freely at the open
-    // boundary; it still gets extrapolated boundary values and halo refresh,
-    // but it is not nudged toward the boundary snapshot here.
+    // Relax only the materially advected mass-level fields. Pressure
+    // perturbation and interface w are allowed to adjust more freely at the
+    // open boundary; they still get extrapolated boundary values and halo
+    // refresh, but they are not nudged toward the boundary snapshot here.
     real_t* relax_fields[] = {state.u, state.v, state.theta,
                               state.qv, state.qc, state.qr};
     real_t* relax_fields_init[] = {state_init.u, state_init.v, state_init.theta,
@@ -297,9 +297,6 @@ void apply_open_boundaries(StateGPU& state, StateGPU& state_init,
     dim3 grid3d_w((nx + 7) / 8, (ny + 7) / 8, ((nz + 1) + 3) / 4);
     open_bc_x_kernel<<<grid_jk_w, block_jk>>>(state.w, nx, ny, nz + 1);
     open_bc_y_kernel<<<grid_ik_w, block_ik>>>(state.w, nx, ny, nz + 1);
-    relax_boundary_kernel<<<grid3d_w, block>>>(
-        state.w, state_init.w, nx, ny, nz + 1, relax_width
-    );
     fill_halo_x_kernel<<<grid_jk_w, block_jk>>>(state.w, nx, ny, nz + 1);
     fill_halo_y_kernel<<<grid_ik_w, block_ik>>>(state.w, nx, ny, nz + 1);
 
