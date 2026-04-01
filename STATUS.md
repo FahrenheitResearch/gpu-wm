@@ -48,7 +48,7 @@ The latest GPT-5.4 Pro review on `main@d92bef2` concluded:
 
 ### `exp/openbc-no-w-relax`
 
-- commit: `f77a2b8`
+- commit: `ec6685f`
 - changes of interest:
   - stop relaxing open-boundary interface `w` toward the parent/boundary snapshot
   - startup-balanced interface `w` initialization is active for loaded real-data states
@@ -110,11 +110,20 @@ Additional regional signal:
   - `U/V/THETA rmse = 11.09 / 8.23 / 29.08`
 - stronger damping at `alpha=8.0` did not clearly beat `alpha=6.0`
 - static and boundary-forced `dt=8`, `alpha=6.0` runs matched closely at `+1 h`, which weakens the case that the first-hour failure is boundary-driven
+- a longer H100 boundary-forced `dt=6`, `alpha=6.0`, `blend=1.0` control has now been verified through `+1.5 h`:
+  - `mean_w = +0.274 m/s`
+  - `mean|w| = 1.391 m/s`
+  - `max|w| = 32.59 m/s`
+  - `U/V/THETA rmse = 14.12 / 11.26 / 37.91`
+  - `outer_20 qtot_d = -7.98%`
+  - `interior qtot_d = -27.04%`
+  - interpretation: the branch is no longer failing by immediate runaway, but the same interior moisture/thermal drift pattern is still present beyond `+1 h`
 
 Ops note:
 
 - a real H100 idle gap happened once because the remote queue drained while the watchdog stayed alive
 - the worker system now treats queue underflow as a fault and reseeds from tracked fallback queues instead of letting paid nodes sit idle
+- the remote worker busy detector was widened to catch `gpu-wm` runs launched from sibling worktrees like `/root/gpu-wm-prad`; before that fix, a node could double-launch a second experiment on top of a manual worktree run
 - serious regional runs can now auto-write `verify_all.json`, weather panels, and a collage via `tools/run_fast_case.py --postprocess-weather`
 - `tools/run_fast_case.py` no longer hard-requires a GRIB file when an explicit existing `--init` is being reused without `--regen-init`; this matters for staging prebuilt regional binaries on rented workers and then launching runs directly
 
@@ -132,6 +141,10 @@ Evidence from the eastern Pennsylvania `+1 h` case:
 - new regional band diagnostics in `tools/verify_forecast.py` show the current `dt=8`, `alpha=6.0` case loses much more moisture in the interior than in the outer 20-cell band:
   - `outer_20 qtot_d = -7.37%`
   - `interior qtot_d = -24.92%`
+- the longer H100 `dt=6` control keeps the same shape of error through `+1.5 h`:
+  - `outer_20 qtot_d = -7.98%`
+  - `interior qtot_d = -27.04%`
+  - interpretation: the branch is surviving longer, but the dominant moisture-loss mechanism is still interior and persistent rather than a short-lived startup transient
 - new terrain-band diagnostics show the moisture loss is not concentrated on the highest terrain:
   - interior low-to-mid terrain quartiles (`zbar ~ 0 / 38 / 198 m`) lose `-28.53% / -35.88% / -30.29%` `qtot`
   - highest-terrain interior quartile (`zbar ~ 404 m`) has the worst `THETA` drift and `|w|`, but only `-0.84%` `qtot` drift
@@ -147,19 +160,53 @@ Most likely current blocker order:
 
 That means the next high-value implementation target is still dycore correctness, not new physics.
 
+## Rejected Follow-Up Branches
+
+Two moisture-transport follow-ups have now been tested and rejected.
+
+### `exp/moisture-conservative-transport`
+
+- commit: `b07e55b`
+- intent:
+  - move `qv/qc/qr` to a transformed conservative transport path
+- result:
+  - failed short canonical gates
+  - worst failure mode was a sign flip in regional/canonical moisture drift
+  - representative `stretch_900` signal:
+    - `outer_20 qtot_d = +29.92%`
+    - `interior qtot_d = +88.95%`
+
+### `exp/moisture-vertical-flux`
+
+- commit: `bc76b9d`
+- intent:
+  - keep horizontal scalar transport unchanged
+  - replace only the moisture vertical term with interface-flux divergence
+- result:
+  - also failed to cure the moisture-drift problem
+  - representative `stretch_900` signal:
+    - `outer_20 qtot_d = +30.85%`
+    - `interior qtot_d = +89.00%`
+
+Interpretation:
+
+- moisture transport is still implicated in the regional drift story
+- but these two direct conservative rewrites are not the next lowest-risk branch
+- the next cleaner experimental lever is now the fast pressure radiative boundary branch, followed by the columnwise semi-implicit `p-w` corrector idea if that branch is flat or negative
+
 ## Fresh Moonshot Directions
 
 Three fresh moonshot reviews are now concrete enough to test, in this order:
 
-1. conservative moisture transport only for `qv/qc/qr`
-   - rationale: current regional `qtot` loss is much more consistent with a scalar transport/operator mismatch than a boundary leak
-   - smallest branch: leave `theta` alone, add a moisture-only conservative transport kernel aligned with the transformed continuity skeleton already used by pressure
-2. pressure-only radiative fast open boundary
+1. pressure-only radiative fast open boundary
    - rationale: if a boundary experiment is going to matter, the cleanest first try is to make `p` less reflective during the fast acoustic refresh, not to fake a lateral `p-w` characteristic pair
    - smallest branch: fast-step `p` strip-history / Orlanski-style radiation only; leave lateral `w` unchanged at first
-3. columnwise semi-implicit vertical acoustic `p-w` corrector
+2. columnwise semi-implicit vertical acoustic `p-w` corrector
    - rationale: the smallest serious numerics jump that could beat another damping sweep is a one-thread-per-column tridiagonal solve for the stiff vertical acoustic pair
    - this is larger than the first two ideas and should stay behind them unless the smaller transport/boundary experiments flatline
+3. revisit moisture transport only after the failure mechanism is narrower
+   - rationale: the direct conservative moisture branches already failed
+   - the next moisture experiment should be driven by a sharper mechanism diagnosis, not another blind transport rewrite
 
 ## Immediate Next Work
 

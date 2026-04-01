@@ -7,7 +7,7 @@ QUEUE_FILE="${GPUWM_QUEUE_FILE:-$WATCHDIR/worker_queue.txt}"
 DEFAULT_QUEUE_FILE="${GPUWM_DEFAULT_QUEUE_FILE:-$REPO_ROOT/tools/ops/default_remote_queue.txt}"
 LOG_FILE="${GPUWM_LOG_FILE:-$WATCHDIR/worker_tick.log}"
 JOB_LOG_DIR="${GPUWM_JOB_LOG_DIR:-$WATCHDIR/remote_jobs}"
-ACTIVE_REGEX="${GPUWM_ACTIVE_REGEX:-(/gpu-wm/build|python3? tools/run_fast_case.py|python3? tools/run_gate_matrix.py|python3? tools/run_freestream_terrain.py)}"
+ACTIVE_REGEX="${GPUWM_ACTIVE_REGEX:-(/gpu-wm[^ ]*/build|gpu-wm(\\.exe)? --gfs|python3? tools/run_fast_case.py|python3? tools/run_gate_matrix.py|python3? tools/run_freestream_terrain.py)}"
 
 mkdir -p "$WATCHDIR" "$JOB_LOG_DIR"
 

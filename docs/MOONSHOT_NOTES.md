@@ -19,11 +19,55 @@ Current grounding:
   and sponge behavior.
 - The current experimental family has already shown that `w` transport,
   `w` damping, and open-boundary `w` handling can move the model materially.
+- Two direct moisture-transport follow-ups have already failed:
+  - `exp/moisture-conservative-transport@b07e55b`
+  - `exp/moisture-vertical-flux@bc76b9d`
+  Both flipped the stretched `qtot` drift positive at `stretch_900`, so the
+  next moonshot should not be another blind conservative-moisture rewrite.
 
 This memo deliberately separates solver-correctness ideas from realism ideas
  and systems ideas.
 
 ## Ranked Ideas
+
+### 0. Fast Pressure Radiative Boundary for the Acoustic Refresh
+
+Category: solver correctness
+
+Why it might matter:
+
+- The active regional branch now survives to `+1 h`, which makes the remaining
+  error more diagnostic than explosive.
+- Boundary-forced and static `+1 h` runs are close, so the lateral boundary is
+  no longer the obvious dominant failure, but the fast acoustic refresh is
+  still the cleanest remaining boundary lever.
+- A pressure-only radiative refresh is smaller and less dangerous than a fake
+  characteristic `p-w` pair and can be tested quickly on top of
+  `exp/openbc-no-w-relax`.
+
+Files / functions:
+
+- `src/core/dynamics.cu::{open_fast_bc_x_kernel, open_fast_bc_y_kernel}`
+- `src/core/dynamics.cu::run_vertical_acoustic_substeps`
+
+Quick falsification:
+
+- Re-run the canonical short gates for regression safety.
+- Then re-run the eastern Pennsylvania `+1 h` boundary-forced case.
+- If regional `THETA` and `qtot` drift do not improve or the canonical
+  `mean|w|` regresses badly, drop it and move on.
+
+Expected compute impact:
+
+- Roughly flat.
+- This is a boundary refresh semantics change, not a cost-heavy method.
+
+Skeptical note:
+
+- If the current interior drift is mostly terrain-coupled source/transport
+  error, this will be neutral.
+- That is still acceptable if it lets us reject the boundary hypothesis
+  cheaply.
 
 ### 1. Column Balance Startup Solve for `w` and `p'`
 
