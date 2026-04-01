@@ -1929,10 +1929,12 @@ void compute_tendencies(StateGPU& state, const GridConfig& grid,
         state.p, state.rho,
         state.terrain, state.eta_m, grid.mapfac_m,
         nx, ny, nz, grid.dx, grid.dy, grid.ztop);
-    pressure_metric_w_interface_kernel<<<grid3d_w, block>>>(
-        state.w_tend, state.p, state.rho,
-        state.terrain, state.eta_m, grid.mapfac_m,
-        nx, ny, nz, grid.dx, grid.dy, grid.ztop);
+    if (!stability_cfg.disable_slow_w_metric) {
+        pressure_metric_w_interface_kernel<<<grid3d_w, block>>>(
+            state.w_tend, state.p, state.rho,
+            state.terrain, state.eta_m, grid.mapfac_m,
+            nx, ny, nz, grid.dx, grid.dy, grid.ztop);
+    }
 
     // Advection
     advection_momentum_kernel<<<grid3d, block>>>(

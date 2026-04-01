@@ -19,6 +19,7 @@ struct StabilityControlConfig {
     double w_damping_beta = 1.0;
     double w_transport_blend = 1.0;
     int w_transport_diagnostics = 0;
+    int disable_slow_w_metric = 0;
 };
 
 struct FlowControlMetrics {
