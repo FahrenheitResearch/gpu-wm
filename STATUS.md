@@ -4,7 +4,7 @@ Last updated: 2026-04-01
 
 ## Current Position
 
-`gpu-wm` is a real CUDA regional-model prototype, but it is still below WRF-quality robustness on large real-data terrain-following runs. The main blocker is still solver correctness, not missing physics breadth.
+`gpu-wm` is a real CUDA regional-model prototype. It is still below WRF-quality on forecast realism and robustness, but it has now crossed an important threshold on the active branch: the eastern Pennsylvania `768 x 640 x 50 @ 4 km` real-data case can survive to `+1 h` instead of catastrophically blowing up.
 
 The strongest public baseline on `main` is:
 
@@ -24,7 +24,7 @@ The latest GPT-5.4 Pro review on `main@d92bef2` concluded:
   - some operators treat `w` as interface `eta-dot`
   - others still behave like `w` is a mass-level field
 - the second major robustness gap is contradictory open-boundary / sponge behavior
-- initialization still lacks a continuity-consistent startup `w`
+- initialization still needed a continuity-consistent startup `w`
 - new physics should not be the next focus
 
 ## Active Experimental Branches
@@ -49,13 +49,12 @@ The latest GPT-5.4 Pro review on `main@d92bef2` concluded:
 ### `exp/openbc-no-w-relax`
 
 - commit: `8f445ae`
-- change:
+- changes of interest:
   - stop relaxing open-boundary interface `w` toward the parent/boundary snapshot
-- current purpose:
-  - test whether freeing lateral `w` removes a major terrain-following regional instability source
+  - startup-balanced interface `w` initialization is active for loaded real-data states
+  - tracked cluster-worker bootstrap and queue docs are now in-repo
 - current result:
-  - this branch is the first one to keep the eastern Pennsylvania `768 x 640 x 50 @ 4 km` case numerically healthy through `+1 h`
-  - both local RTX 5090 and remote H100 reached `+1 h` without runaway `w/p`
+  - this is the first branch to keep the eastern Pennsylvania `768 x 640 x 50 @ 4 km` case numerically healthy through `+1 h`
 
 ## Best Verified Canonical Gate Result So Far
 
@@ -86,33 +85,32 @@ The eastern Pennsylvania 4 km terrain-following regional setup:
 
 Current behavior:
 
-- the current branch survives to `+1 h` on both local RTX 5090 and remote H100
+- the active branch survives to `+1 h` on both the local RTX 5090 and the remote H100
 - representative `dt=8`, `alpha=6.0`, `blend=1.0` results at `+1 h`:
-  - `mean_w=+0.506 m/s`
-  - `mean|w|=1.697 m/s`
-  - `max|w|=18.28 m/s`
+  - `mean_w = +0.506 m/s`
+  - `mean|w| = 1.697 m/s`
+  - `max|w| = 18.28 m/s`
   - `U/V/THETA rmse = 12.60 / 8.56 / 33.03`
-- boundary-forced local and static remote runs matched closely at this horizon
+- the local boundary-forced run and the remote static run matched closely at this horizon
 
 Interpretation:
 
 - freeing lateral `w` was a major regional-stability lever
-- the model is no longer in the old “instant catastrophic blow-up” regime on this case
-- the next step is to reduce drift and thermodynamic error, not just survive
+- startup-balanced interface `w` removed the old catastrophic `+1 h` failure mode
+- the project is now in a "survives but drifts" regime instead of an "instant blow-up" regime on this case
+- the next problem is quality and longer-horizon robustness, not immediate `w/p` runaway at `+1 h`
 
 ## Immediate Next Work
 
 The next implementation target is:
 
-1. add startup divergence diagnostics
-2. build a one-time continuity-consistent initialization for interface `w`
-3. apply that both to the primary state and time-varying boundary snapshots
-4. rerun:
-   - canonical short gates
-   - eastern Pennsylvania `+1 h` static case
-   - eastern Pennsylvania `+1 h` boundary-forced case
-
-If startup-balanced `w` materially improves `+1 h`, the next target after that is dedicated interface-aware `w` open-boundary handling instead of generic scalar semantics.
+1. finish the `+1 h` confirmation matrix now in progress:
+   - H100 boundary-forced `dt=8`
+   - local boundary-forced `dt=8`, stronger `w` damping
+   - `dt=6` regional follow-ups only if they buy real quality, not just extra margin
+2. promote the eastern Pennsylvania case from "survives `+1 h`" to a cleaner `+3 h` / `+6 h` signal
+3. keep tightening startup and boundary diagnostics so drift sources are measurable
+4. after that, try the smallest dedicated interface-aware lateral `w` boundary operator instead of generic scalar semantics
 
 ## Experiment Discipline
 
@@ -123,4 +121,4 @@ Any change should be judged in this order:
 3. eastern Pennsylvania `+1 h` regional case
 4. only then larger or longer real-data runs
 
-The project is not blocked by missing sophisticated physics right now. It is blocked by making the solver numerically boring on large real-data terrain-following runs.
+The project is not blocked by missing sophisticated physics right now. It is blocked by making the solver numerically boring on real-data terrain-following regional domains and then making those surviving runs look meteorologically cleaner.
