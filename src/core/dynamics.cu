@@ -1272,6 +1272,7 @@ __global__ void semiimplicit_pw_column_kernel(
     int nx, int ny, int nz,
     double dx, double dy, double dt_ac,
     double cs_eff2,
+    double smdiv,
     double ztop
 ) {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
@@ -1286,10 +1287,12 @@ __global__ void semiimplicit_pw_column_kernel(
 
     double cprime[PW_COLUMN_MAX_NZ];
     double dprime[PW_COLUMN_MAX_NZ];
+    double pold[PW_COLUMN_MAX_NZ];
     double pnew[PW_COLUMN_MAX_NZ];
 
     for (int k = 0; k < nz; ++k) {
         int ijk = idx3(i, j, k, nx_h, ny_h);
+        pold[k] = (double)p_pert[ijk];
         double dz_cell = local_mass_cell_thickness(terrain, eta_w, i, j, k, nx, ztop);
         double rho_cell = reference_density_from_field(rho_ref, i, j, k, nx_h, ny_h);
         double hdiv = generalized_horizontal_divergence(
@@ -1297,7 +1300,7 @@ __global__ void semiimplicit_pw_column_kernel(
         );
         double old_dwdz = ((double)w[idx3w(i, j, k + 1, nx_h, ny_h)] -
                            (double)w[idx3w(i, j, k, nx_h, ny_h)]) / dz_cell;
-        double rhs = (double)p_pert[ijk] - dt_ac * rho_cell * cs_eff2 * (hdiv + old_dwdz);
+        double rhs = pold[k] - dt_ac * rho_cell * cs_eff2 * (hdiv + old_dwdz);
 
         double beta_lo = 0.0;
         if (k > 0) {
@@ -1338,7 +1341,8 @@ __global__ void semiimplicit_pw_column_kernel(
     }
 
     for (int k = 0; k < nz; ++k) {
-        p_pert[idx3(i, j, k, nx_h, ny_h)] = (real_t)pnew[k];
+        double dp = pnew[k] - pold[k];
+        p_pert[idx3(i, j, k, nx_h, ny_h)] = (real_t)(pold[k] + (1.0 - smdiv) * dp);
     }
 
     w[idx3w(i, j, 0, nx_h, ny_h)] = (real_t)0.0;
@@ -1349,7 +1353,8 @@ __global__ void semiimplicit_pw_column_kernel(
         double beta_if = dt_ac / (rho_if * dz_cc);
         double w_old = (double)w[idx3w(i, j, k_if, nx_h, ny_h)];
         double w_new = w_old - beta_if * (pnew[k_if] - pnew[k_if - 1]);
-        w[idx3w(i, j, k_if, nx_h, ny_h)] = (real_t)w_new;
+        double dw = w_new - w_old;
+        w[idx3w(i, j, k_if, nx_h, ny_h)] = (real_t)(w_old + (1.0 - smdiv) * dw);
     }
 }
 
@@ -1773,10 +1778,7 @@ void run_vertical_acoustic_substeps(
                 state.u, state.v, state.rho,
                 state.terrain, state.eta_m, state.eta, grid.mapfac_m,
                 nx, ny, nz, grid.dx, grid.dy, dt_ac,
-                cs_eff2, grid.ztop
-            );
-            pressure_divergence_filter_kernel<<<grid1d, block1d>>>(
-                state.p, state.phi, ACOUSTIC_SMDIV, n_total
+                cs_eff2, ACOUSTIC_SMDIV, grid.ztop
             );
             refresh_fast_field_boundaries(state.p, grid, use_open_bc, nz);
         } else {
