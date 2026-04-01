@@ -89,6 +89,15 @@ Success is not "the plot looks okay." Track:
 
 The stretched case should move toward the uniform case, not away from it.
 
+Current branch-level gate runner:
+
+```bash
+python3 tools/run_gate_matrix.py --profile wdamp --include-6h
+```
+
+That runs the canonical 64x64x20 terrain-following cases and fails if the
+current `w`/RMSE envelope regresses. Use `--no-enforce` for comparison-only runs.
+
 ## Precision Stance
 
 Do not assume full `fp64` everywhere is required for the model to be useful.
