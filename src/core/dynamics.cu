@@ -27,6 +27,32 @@ void apply_open_boundaries(StateGPU& state, StateGPU& state_init,
 
 static constexpr double ACOUSTIC_SMDIV = 0.10;
 
+namespace {
+
+constexpr int W_TRANSPORT_DIAG_SUM_ABS_OLD = 0;
+constexpr int W_TRANSPORT_DIAG_SUM_ABS_NEW = 1;
+constexpr int W_TRANSPORT_DIAG_SUM_ABS_DELTA = 2;
+constexpr int W_TRANSPORT_DIAG_SUM_DELTA = 3;
+constexpr int W_TRANSPORT_DIAG_SUM_DIV = 4;
+constexpr int W_TRANSPORT_DIAG_SUM_DELTA_DIV = 5;
+constexpr int W_TRANSPORT_DIAG_SUM_DELTA2 = 6;
+constexpr int W_TRANSPORT_DIAG_SUM_DIV2 = 7;
+constexpr int W_TRANSPORT_DIAG_SAMPLES = 8;
+constexpr int W_TRANSPORT_DIAG_COUNT = 9;
+
+double* g_w_transport_diag_device = nullptr;
+double g_w_transport_tendency_calls = 0.0;
+
+double* ensure_w_transport_diag_buffer() {
+    if (!g_w_transport_diag_device) {
+        CUDA_CHECK(cudaMalloc(&g_w_transport_diag_device, W_TRANSPORT_DIAG_COUNT * sizeof(double)));
+        CUDA_CHECK(cudaMemset(g_w_transport_diag_device, 0, W_TRANSPORT_DIAG_COUNT * sizeof(double)));
+    }
+    return g_w_transport_diag_device;
+}
+
+} // namespace
+
 // ----------------------------------------------------------
 // 3rd-order upwind-biased derivative (double precision compute)
 // ----------------------------------------------------------
@@ -598,6 +624,46 @@ FlowControlMetrics compute_flow_control_metrics(const StateGPU& state, const Gri
     return result;
 }
 
+void reset_w_transport_diagnostics() {
+    g_w_transport_tendency_calls = 0.0;
+    if (g_w_transport_diag_device) {
+        CUDA_CHECK(cudaMemset(g_w_transport_diag_device, 0, W_TRANSPORT_DIAG_COUNT * sizeof(double)));
+    }
+}
+
+WTransportDiagnostics consume_w_transport_diagnostics() {
+    WTransportDiagnostics result;
+    result.tendency_calls = g_w_transport_tendency_calls;
+
+    if (!g_w_transport_diag_device || g_w_transport_tendency_calls <= 0.0) {
+        return result;
+    }
+
+    double host_stats[W_TRANSPORT_DIAG_COUNT];
+    CUDA_CHECK(cudaMemcpy(host_stats, g_w_transport_diag_device,
+                          sizeof(host_stats), cudaMemcpyDeviceToHost));
+
+    double samples = fmax(host_stats[W_TRANSPORT_DIAG_SAMPLES], 0.0);
+    result.samples = samples;
+    if (samples > 0.0) {
+        result.mean_abs_old_total = host_stats[W_TRANSPORT_DIAG_SUM_ABS_OLD] / samples;
+        result.mean_abs_new_total = host_stats[W_TRANSPORT_DIAG_SUM_ABS_NEW] / samples;
+        result.mean_abs_delta = host_stats[W_TRANSPORT_DIAG_SUM_ABS_DELTA] / samples;
+        result.mean_delta = host_stats[W_TRANSPORT_DIAG_SUM_DELTA] / samples;
+        result.mean_divergence = host_stats[W_TRANSPORT_DIAG_SUM_DIV] / samples;
+        result.rms_delta = sqrt(host_stats[W_TRANSPORT_DIAG_SUM_DELTA2] / samples);
+        result.rms_divergence = sqrt(host_stats[W_TRANSPORT_DIAG_SUM_DIV2] / samples);
+        double denom = sqrt(host_stats[W_TRANSPORT_DIAG_SUM_DELTA2] *
+                            host_stats[W_TRANSPORT_DIAG_SUM_DIV2]);
+        if (denom > 1.0e-20) {
+            result.delta_div_correlation = host_stats[W_TRANSPORT_DIAG_SUM_DELTA_DIV] / denom;
+        }
+    }
+
+    reset_w_transport_diagnostics();
+    return result;
+}
+
 // ----------------------------------------------------------
 // Advection kernel for momentum
 // ----------------------------------------------------------
@@ -656,6 +722,8 @@ __global__ void advection_w_interface_kernel(
     const real_t* __restrict__ terrain,
     const double* __restrict__ eta_w,
     const double* __restrict__ mapfac_m,
+    double w_transport_blend,
+    double* __restrict__ transport_stats,
     int nx, int ny, int nz,
     double dx, double dy,
     double ztop
@@ -765,9 +833,37 @@ __global__ void advection_w_interface_kernel(
 
     double old_total = ax_old + ay_old + az_old + u_if * azx + v_if * azy;
     double new_total = ax_new + ay_new + az_new;
-    constexpr double W_TRANSPORT_ERF_BLEND = 0.5;
-    double total = (1.0 - W_TRANSPORT_ERF_BLEND) * old_total
-                 + W_TRANSPORT_ERF_BLEND * new_total;
+    double total = (1.0 - w_transport_blend) * old_total
+                 + w_transport_blend * new_total;
+
+    if (transport_stats) {
+        double dz_lo = local_mass_cell_thickness(terrain, eta_w, i, j, k - 1, nx, ztop);
+        double dz_hi = local_mass_cell_thickness(terrain, eta_w, i, j, k, nx, ztop);
+        double hdiv_lo = generalized_horizontal_divergence(
+            u, v, terrain, i, j, k - 1, nx, ny, nx_h, ny_h, dx_eff, dy_eff, ztop
+        );
+        double hdiv_hi = generalized_horizontal_divergence(
+            u, v, terrain, i, j, k, nx, ny, nx_h, ny_h, dx_eff, dy_eff, ztop
+        );
+        double div_lo = hdiv_lo +
+            (((double)w[idx3w(i, j, k, nx_h, ny_h)] -
+              (double)w[idx3w(i, j, k - 1, nx_h, ny_h)]) / dz_lo);
+        double div_hi = hdiv_hi +
+            (((double)w[idx3w(i, j, k + 1, nx_h, ny_h)] -
+              (double)w[idx3w(i, j, k, nx_h, ny_h)]) / dz_hi);
+        double div_if = 0.5 * (div_lo + div_hi);
+        double delta = new_total - old_total;
+
+        atomicAdd(&transport_stats[W_TRANSPORT_DIAG_SUM_ABS_OLD], fabs(old_total));
+        atomicAdd(&transport_stats[W_TRANSPORT_DIAG_SUM_ABS_NEW], fabs(new_total));
+        atomicAdd(&transport_stats[W_TRANSPORT_DIAG_SUM_ABS_DELTA], fabs(delta));
+        atomicAdd(&transport_stats[W_TRANSPORT_DIAG_SUM_DELTA], delta);
+        atomicAdd(&transport_stats[W_TRANSPORT_DIAG_SUM_DIV], div_if);
+        atomicAdd(&transport_stats[W_TRANSPORT_DIAG_SUM_DELTA_DIV], delta * div_if);
+        atomicAdd(&transport_stats[W_TRANSPORT_DIAG_SUM_DELTA2], delta * delta);
+        atomicAdd(&transport_stats[W_TRANSPORT_DIAG_SUM_DIV2], div_if * div_if);
+        atomicAdd(&transport_stats[W_TRANSPORT_DIAG_SAMPLES], 1.0);
+    }
 
     w_tend[ijk_w] = (real_t)((double)w_tend[ijk_w] - total);
     #undef FW
@@ -1609,6 +1705,11 @@ void compute_tendencies(StateGPU& state, const GridConfig& grid,
     dim3 grid3d_w((nx + 7) / 8, (ny + 7) / 8, ((nz + 1) + 3) / 4);
     int block1d = 256, grid1d = (n_total+255)/256;
     int grid1d_w = (n_total_w + block1d - 1) / block1d;
+    double* w_transport_diag = nullptr;
+    if (stability_cfg.w_transport_diagnostics) {
+        w_transport_diag = ensure_w_transport_diag_buffer();
+        g_w_transport_tendency_calls += 1.0;
+    }
 
     zero_field_kernel<<<grid1d, block1d>>>(state.u_tend, n_total);
     zero_field_kernel<<<grid1d, block1d>>>(state.v_tend, n_total);
@@ -1633,6 +1734,7 @@ void compute_tendencies(StateGPU& state, const GridConfig& grid,
     advection_w_interface_kernel<<<grid3d_w, block>>>(
         state.u, state.v, state.w, state.w_tend,
         state.terrain, state.eta, grid.mapfac_m,
+        stability_cfg.w_transport_blend, w_transport_diag,
         nx, ny, nz, grid.dx, grid.dy, grid.ztop);
 
     advection_scalar_kernel<<<grid3d, block>>>(

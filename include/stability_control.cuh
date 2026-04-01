@@ -17,6 +17,8 @@ struct StabilityControlConfig {
     int w_cfl_damping = 0;
     double w_damping_alpha = 0.3;
     double w_damping_beta = 1.0;
+    double w_transport_blend = 1.0;
+    int w_transport_diagnostics = 0;
 };
 
 struct FlowControlMetrics {
@@ -39,6 +41,19 @@ struct AdaptiveStabilityState {
     double vort_cfl = 0.0;
     double div_ratio = 0.0;
     double control_signal = 0.0;
+};
+
+struct WTransportDiagnostics {
+    double mean_abs_old_total = 0.0;
+    double mean_abs_new_total = 0.0;
+    double mean_abs_delta = 0.0;
+    double mean_delta = 0.0;
+    double mean_divergence = 0.0;
+    double rms_delta = 0.0;
+    double rms_divergence = 0.0;
+    double delta_div_correlation = 0.0;
+    double samples = 0.0;
+    double tendency_calls = 0.0;
 };
 
 inline AdaptiveStabilityState evaluate_adaptive_stability(
@@ -73,5 +88,7 @@ inline AdaptiveStabilityState evaluate_adaptive_stability(
 }
 
 FlowControlMetrics compute_flow_control_metrics(const StateGPU& state, const GridConfig& grid);
+WTransportDiagnostics consume_w_transport_diagnostics();
+void reset_w_transport_diagnostics();
 
 } // namespace gpuwm

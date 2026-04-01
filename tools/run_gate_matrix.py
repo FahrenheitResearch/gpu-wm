@@ -22,6 +22,12 @@ PROFILE_ARGS: Dict[str, List[str]] = {
     # Strongest known w-damp setting that still passes the stretched 15 min,
     # 1 h, and 6 h gate set as of 2026-03-31.
     "wdamp": ["--w-damp", "--w-damp-alpha", "6.0", "--w-damp-beta", "0.0"],
+    # Best current solver-side branch on top of the passing wdamp envelope:
+    # pure ERF-style interface w transport with no legacy blend.
+    "wdamp-erf-pure": [
+        "--w-damp", "--w-damp-alpha", "6.0", "--w-damp-beta", "0.0",
+        "--w-transport-blend", "1.0",
+    ],
     "wdamp-legacy": ["--w-damp", "--w-damp-alpha", "3.0", "--w-damp-beta", "0.0"],
     "wdamp-moderate": ["--w-damp", "--w-damp-alpha", "2.0", "--w-damp-beta", "0.2"],
 }

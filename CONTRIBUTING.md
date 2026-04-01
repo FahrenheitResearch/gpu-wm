@@ -100,6 +100,18 @@ current `w`/RMSE envelope regresses. The `wdamp` profile tracks the current
 best-known vertical `w` damping setting. Use `--no-enforce` for comparison-only
 runs.
 
+As of `2026-03-31`, the strongest solver-side child branch is the pure
+ERF-style interface `w` transport path. Reproduce it with:
+
+```bash
+python3 tools/run_gate_matrix.py --profile wdamp-erf-pure --include-6h
+```
+
+That profile keeps the passing `w_damp 6.0 / 0.0` envelope but sets
+`--w-transport-blend 1.0` instead of the older 50/50 blend. On the current
+experimental branch it improves the stretched `15 min`, `1 h`, and `6 h` gates
+while keeping the short uniform gate inside the current threshold envelope.
+
 As of `2026-03-31`, `--w-damp-alpha 7.0 --w-damp-beta 0.0` improves the 120 s
 smokes but fails the stretched 15 min / 1 h gates, so keep the canonical
 profile at `6.0 / 0.0` until the dycore is stronger.

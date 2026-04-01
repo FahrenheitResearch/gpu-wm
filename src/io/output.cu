@@ -545,6 +545,10 @@ void print_diagnostics(const StateGPU& state, const GridConfig& grid,
     FlowControlMetrics control_metrics = compute_flow_control_metrics(state, grid);
     AdaptiveStabilityState adaptive_state =
         evaluate_adaptive_stability(stability_cfg, control_metrics, time > 0.0 ? time / fmax((double)step, 1.0) : 0.0);
+    WTransportDiagnostics w_transport_diag;
+    if (stability_cfg.w_transport_diagnostics) {
+        w_transport_diag = consume_w_transport_diagnostics();
+    }
 
     static bool baseline_set = false;
     static IntegralBudgetMetrics baseline_budgets;
@@ -597,6 +601,23 @@ void print_diagnostics(const StateGPU& state, const GridConfig& grid,
         adaptive_state.kdiff_scale, adaptive_state.pressure_retain,
         qc_max, qr_max
     );
+    if (stability_cfg.w_transport_diagnostics && w_transport_diag.samples > 0.5) {
+        printf(
+            "                  w-transport: blend=%.2f  calls=%.0f  samples=%.0f | "
+            "|old|=%.3e  |new|=%.3e  |delta|=%.3e  rms(delta)=%.3e  "
+            "mean(div)=%.3e  rms(div)=%.3e  corr(delta,div)=%.3f\n",
+            stability_cfg.w_transport_blend,
+            w_transport_diag.tendency_calls,
+            w_transport_diag.samples,
+            w_transport_diag.mean_abs_old_total,
+            w_transport_diag.mean_abs_new_total,
+            w_transport_diag.mean_abs_delta,
+            w_transport_diag.rms_delta,
+            w_transport_diag.mean_divergence,
+            w_transport_diag.rms_divergence,
+            w_transport_diag.delta_div_correlation
+        );
+    }
 }
 
 // ----------------------------------------------------------
