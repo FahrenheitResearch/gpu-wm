@@ -1463,6 +1463,73 @@ __global__ void convert_w_to_contravariant_kernel(
     w[ijk] = (real_t)((double)w[ijk] - (double)u[ijk] * zx - (double)v[ijk] * zy);
 }
 
+__global__ void initialize_w_from_continuity_kernel(
+    real_t* __restrict__ w,
+    const real_t* __restrict__ u,
+    const real_t* __restrict__ v,
+    const real_t* __restrict__ terrain,
+    const double* __restrict__ eta_w,
+    const double* __restrict__ mapfac_m,
+    double* __restrict__ metrics,
+    int nx, int ny, int nz,
+    double dx, double dy, double ztop
+) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    int j = blockIdx.y * blockDim.y + threadIdx.y;
+    if (i >= nx || j >= ny) return;
+
+    int nx_h = nx + 4;
+    int ny_h = ny + 4;
+    double mapfac = mapfac_m ? mapfac_m[j] : 1.0;
+    double dx_eff = dx / mapfac;
+    double dy_eff = dy / mapfac;
+
+    w[idx3w(i, j, 0, nx_h, ny_h)] = (real_t)0.0;
+
+    double w_if = 0.0;
+    for (int k = 0; k < nz; ++k) {
+        double hdiv = generalized_horizontal_divergence(
+            u, v, terrain, i, j, k, nx, ny, nx_h, ny_h, dx_eff, dy_eff, ztop
+        );
+        double dz_cell = local_mass_cell_thickness(terrain, eta_w, i, j, k, nx, ztop);
+        w_if -= hdiv * dz_cell;
+        w[idx3w(i, j, k + 1, nx_h, ny_h)] = (real_t)w_if;
+    }
+
+    double top_raw = w_if;
+    double sum_abs_hdiv = 0.0;
+    atomicAdd(&metrics[0], fabs(top_raw));
+    atomicMax((unsigned long long*)&metrics[1], __double_as_longlong(fabs(top_raw)));
+    atomicAdd(&metrics[4], 1.0);
+
+    double eta_lo = eta_w[0];
+    double eta_hi = eta_w[nz];
+    double eta_span = fabs(eta_hi - eta_lo) > 1.0e-12 ? (eta_hi - eta_lo) : 1.0;
+    for (int k_if = 1; k_if < nz; ++k_if) {
+        double alpha = (eta_w[k_if] - eta_lo) / eta_span;
+        int ijk_w = idx3w(i, j, k_if, nx_h, ny_h);
+        w[ijk_w] = (real_t)((double)w[ijk_w] - alpha * top_raw);
+    }
+
+    w[idx3w(i, j, 0,  nx_h, ny_h)] = (real_t)0.0;
+    w[idx3w(i, j, nz, nx_h, ny_h)] = (real_t)0.0;
+
+    for (int k = 0; k < nz; ++k) {
+        double hdiv = generalized_horizontal_divergence(
+            u, v, terrain, i, j, k, nx, ny, nx_h, ny_h, dx_eff, dy_eff, ztop
+        );
+        sum_abs_hdiv += fabs(hdiv);
+        double dz_cell = local_mass_cell_thickness(terrain, eta_w, i, j, k, nx, ztop);
+        double dwdz = ((double)w[idx3w(i, j, k + 1, nx_h, ny_h)] -
+                       (double)w[idx3w(i, j, k,     nx_h, ny_h)]) / dz_cell;
+        double div = hdiv + dwdz;
+        atomicAdd(&metrics[2], fabs(div));
+        atomicMax((unsigned long long*)&metrics[3], __double_as_longlong(fabs(div)));
+        atomicAdd(&metrics[5], 1.0);
+    }
+    atomicAdd(&metrics[6], sum_abs_hdiv);
+}
+
 __global__ void open_fast_bc_x_kernel(real_t* __restrict__ field, int nx, int ny, int nz) {
     int j = blockIdx.x * blockDim.x + threadIdx.x;
     int k = blockIdx.y * blockDim.y + threadIdx.y;
@@ -1648,6 +1715,44 @@ void convert_w_to_contravariant(StateGPU& state, const GridConfig& grid) {
         state.w, state.u, state.v, state.terrain, state.eta_m, grid.mapfac_m,
         nx, ny, nz, grid.dx, grid.dy, grid.ztop
     );
+}
+
+void initialize_w_from_continuity(StateGPU& state, const GridConfig& grid, const char* label) {
+    int nx = grid.nx;
+    int ny = grid.ny;
+    int nz = grid.nz;
+
+    dim3 block_ij(16, 16);
+    dim3 grid_ij((nx + 15) / 16, (ny + 15) / 16);
+
+    double* d_metrics = nullptr;
+    double zero[7] = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+    CUDA_CHECK(cudaMalloc(&d_metrics, sizeof(zero)));
+    CUDA_CHECK(cudaMemcpy(d_metrics, zero, sizeof(zero), cudaMemcpyHostToDevice));
+
+    initialize_w_from_continuity_kernel<<<grid_ij, block_ij>>>(
+        state.w, state.u, state.v, state.terrain, state.eta, grid.mapfac_m, d_metrics,
+        nx, ny, nz, grid.dx, grid.dy, grid.ztop
+    );
+    bc_w_kernel<<<grid_ij, block_ij>>>(
+        state.w, state.u, state.v, state.terrain, state.eta_m, grid.mapfac_m,
+        nx, ny, nz, grid.dx, grid.dy, grid.ztop
+    );
+
+    double host_metrics[7];
+    CUDA_CHECK(cudaMemcpy(host_metrics, d_metrics, sizeof(host_metrics), cudaMemcpyDeviceToHost));
+    CUDA_CHECK(cudaFree(d_metrics));
+
+    double column_count = fmax(host_metrics[4], 1.0);
+    double cell_count = fmax(host_metrics[5], 1.0);
+    printf("Startup w-balance [%s]: mean|w_top_raw|=%.4e m/s, max|w_top_raw|=%.4e m/s, "
+           "mean|hdiv|=%.4e s^-1, mean|div|=%.4e s^-1, max|div|=%.4e s^-1\n",
+           label ? label : "state",
+           host_metrics[0] / column_count,
+           host_metrics[1],
+           host_metrics[6] / cell_count,
+           host_metrics[2] / cell_count,
+           host_metrics[3]);
 }
 
 // ----------------------------------------------------------

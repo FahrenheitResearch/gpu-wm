@@ -41,6 +41,7 @@ void apply_open_boundaries(StateGPU& state, StateGPU& state_init,
                            const GridConfig& grid, int relax_width);
 void refresh_open_halos(StateGPU& state, const GridConfig& grid);
 void convert_w_to_contravariant(StateGPU& state, const GridConfig& grid);
+void initialize_w_from_continuity(StateGPU& state, const GridConfig& grid, const char* label);
 void run_microphysics(StateGPU& state, const GridConfig& grid, double dt);
 void run_microphysics_thompson(StateGPU& state, const GridConfig& grid, double dt);
 void run_radiation(StateGPU& state, const GridConfig& grid,
@@ -503,6 +504,9 @@ int main(int argc, char** argv) {
 
     setup_projection_metrics(grid, proj);
     convert_w_to_contravariant(state, grid);
+    if (gfs_mode) {
+        initialize_w_from_continuity(state, grid, "primary-init");
+    }
     print_case_summary(grid);
 
     allocate_state(state_old, grid);
@@ -549,6 +553,7 @@ int main(int argc, char** argv) {
                 return 1;
             }
             convert_w_to_contravariant(node.state, grid);
+            initialize_w_from_continuity(node.state, grid, spec.path.c_str());
         }
 
         std::sort(boundary_nodes.begin(), boundary_nodes.end(),
