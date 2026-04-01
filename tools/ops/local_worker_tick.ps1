@@ -8,6 +8,7 @@ $localQueue = Join-Path $watchDir "local_queue.txt"
 $logFile = Join-Path $watchDir "local_tick.log"
 $stateFile = Join-Path $watchDir "local_tick_state.txt"
 $localJobLogDir = Join-Path $watchDir "local_jobs"
+$defaultQueue = Join-Path $repoRoot "tools\ops\default_local_queue.txt"
 $remoteHost = "root@20.119.175.17"
 $remotePort = 2528
 
@@ -85,6 +86,36 @@ function Pop-QueueCommand {
     return $command
 }
 
+function Refill-QueueFromDefault {
+    param(
+        [string]$QueuePath,
+        [string]$DefaultPath
+    )
+    if (-not (Test-Path $DefaultPath)) {
+        return $false
+    }
+
+    $defaultLines = Get-Content -Path $DefaultPath | Where-Object {
+        -not [string]::IsNullOrWhiteSpace($_) -and -not $_.Trim().StartsWith("#")
+    }
+    if ($defaultLines.Count -eq 0) {
+        return $false
+    }
+
+    $existingLines = @()
+    if (Test-Path $QueuePath) {
+        $existingLines = Get-Content -Path $QueuePath
+    }
+    $merged = New-Object System.Collections.Generic.List[string]
+    if ($existingLines.Count -gt 0) {
+        foreach ($line in $existingLines) { $merged.Add($line) }
+    }
+    foreach ($line in $defaultLines) { $merged.Add($line) }
+    Set-Content -Path $QueuePath -Value $merged
+    Write-Log "refilled local queue from default template $DefaultPath"
+    return $true
+}
+
 function Start-LocalExperiment {
     param([string]$Command)
     $repoWsl = To-WslPath $repoRoot
@@ -113,6 +144,15 @@ if (-not $localBusy) {
     if ($null -ne $next -and $next.Length -gt 0) {
         Start-LocalExperiment -Command $next
     } else {
-        Write-Log "local queue empty"
+        if (Refill-QueueFromDefault -QueuePath $localQueue -DefaultPath $defaultQueue) {
+            $next = Pop-QueueCommand -QueuePath $localQueue
+            if ($null -ne $next -and $next.Length -gt 0) {
+                Start-LocalExperiment -Command $next
+            } else {
+                Write-Log "local queue empty after attempted refill"
+            }
+        } else {
+            Write-Log "local queue empty"
+        }
     }
 }

@@ -111,6 +111,11 @@ Additional regional signal:
 - stronger damping at `alpha=8.0` did not clearly beat `alpha=6.0`
 - static and boundary-forced `dt=8`, `alpha=6.0` runs matched closely at `+1 h`, which weakens the case that the first-hour failure is boundary-driven
 
+Ops note:
+
+- a real H100 idle gap happened once because the remote queue drained while the watchdog stayed alive
+- the worker system now treats queue underflow as a fault and reseeds from tracked fallback queues instead of letting paid nodes sit idle
+
 ## Current Drift Diagnosis
 
 The current branch is no longer dominated by immediate boundary blow-up. The remaining drift looks mostly interior and terrain-coupled.

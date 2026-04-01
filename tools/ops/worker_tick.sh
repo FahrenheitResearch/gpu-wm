@@ -4,6 +4,7 @@ set -euo pipefail
 REPO_ROOT="${GPUWM_REPO_ROOT:-$(pwd)}"
 WATCHDIR="${GPUWM_WATCHDIR:-$REPO_ROOT/output/watchdog}"
 QUEUE_FILE="${GPUWM_QUEUE_FILE:-$WATCHDIR/worker_queue.txt}"
+DEFAULT_QUEUE_FILE="${GPUWM_DEFAULT_QUEUE_FILE:-$REPO_ROOT/tools/ops/default_remote_queue.txt}"
 LOG_FILE="${GPUWM_LOG_FILE:-$WATCHDIR/worker_tick.log}"
 JOB_LOG_DIR="${GPUWM_JOB_LOG_DIR:-$WATCHDIR/remote_jobs}"
 ACTIVE_REGEX="${GPUWM_ACTIVE_REGEX:-(/gpu-wm/build|python3? tools/run_fast_case.py|python3? tools/run_gate_matrix.py|python3? tools/run_freestream_terrain.py)}"
@@ -70,6 +71,28 @@ print(cmd)
 PY
 }
 
+refill_queue_from_default() {
+  python3 - "$QUEUE_FILE" "$DEFAULT_QUEUE_FILE" <<'PY'
+import pathlib, sys
+queue_path = pathlib.Path(sys.argv[1])
+default_path = pathlib.Path(sys.argv[2])
+if not default_path.exists():
+    print("0")
+    raise SystemExit
+default_lines = [
+    line.rstrip("\n")
+    for line in default_path.read_text().splitlines()
+    if line.strip() and not line.lstrip().startswith("#")
+]
+if not default_lines:
+    print("0")
+    raise SystemExit
+existing = queue_path.read_text().splitlines() if queue_path.exists() else []
+queue_path.write_text("\n".join(existing + default_lines) + "\n")
+print("1")
+PY
+}
+
 start_next_job() {
   local cmd="$1"
   local stamp session joblog
@@ -89,6 +112,13 @@ fi
 
 log "idle gpu=[$gpu]"
 next="$(pop_queue_line || true)"
+if [[ -z "${next:-}" ]]; then
+  if [[ "$(refill_queue_from_default)" == "1" ]]; then
+    log "queue refilled from default template"
+    next="$(pop_queue_line || true)"
+  fi
+fi
+
 if [[ -z "${next:-}" ]]; then
   log "queue empty"
   exit 0

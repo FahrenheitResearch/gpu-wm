@@ -157,10 +157,20 @@ Do not fill expensive nodes with long hero runs while the `+1 h` regional failur
 The controller should:
 
 - keep the local workstation and remote nodes busy unless they are intentionally paused
+- treat queue underflow on paid nodes as a fault, not a benign state
 - prefer one hypothesis per branch and one run per queue item
 - commit status updates whenever a result materially changes the diagnosis
 - converge workers onto the tracked `tools/ops/*` scripts instead of stale ad hoc watchdogs
 - let the moonshot sidecar generate ideas, but only promote ideas that survive the benchmark ladder
+
+## No-Idle Rule
+
+The repo now carries tracked fallback queues:
+
+- `tools/ops/default_local_queue.txt`
+- `tools/ops/default_remote_queue.txt`
+
+If a live queue drains while a worker is otherwise healthy, the worker tick should reseed from the fallback queue and immediately launch the next job. On rented nodes, `queue empty` should only happen when both the live queue and fallback queue are intentionally empty.
 
 ## Current Scientific Priority
 
