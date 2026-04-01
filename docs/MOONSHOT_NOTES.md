@@ -218,6 +218,18 @@ Expected compute impact:
 Skeptical note:
 
 - This is high upside and real numerics, not hand-tuning.
+
+Current status:
+
+- the most concrete prototype sketch so far is now a bounded branch plan:
+  - replace only the current explicit fast vertical acoustic trio in
+    `src/core/dynamics.cu::{acoustic_vertical_pg_kernel, pressure_update_kernel, run_vertical_acoustic_substeps}`
+  - solve the coupled vertical fast `p'-w` pair implicitly per `(i,j)` column
+    during each acoustic substep
+  - hold `u`, `v`, terrain metrics, slow tendencies, sponge, and scalar transport fixed
+  - expose it behind a narrow runtime flag such as `--semiimplicit-pw`
+- this is now concrete enough to code when the bounded guardrail branch
+  stops paying off
 - It is also the easiest idea here to burn a week on if the algebra is not
   careful.
 

@@ -118,6 +118,12 @@ Additional regional signal:
   - `outer_20 qtot_d = -7.98%`
   - `interior qtot_d = -27.04%`
   - interpretation: the branch is no longer failing by immediate runaway, but the same interior moisture/thermal drift pattern is still present beyond `+1 h`
+- the same H100 control path has now also been verified through `+3 h`:
+  - `mean|w| = 1.918 m/s`
+  - `U/V/THETA rmse = 15.64 / 24.19 / 57.75`
+  - `outer_20 qtot_d = -17.52%`
+  - `interior qtot_d = -47.09%`
+  - interpretation: the model is firmly in a survives-but-drifts regime now; the longer-horizon problem is persistent interior degradation, not a return to the old instant blow-up mode
 
 Ops note:
 
@@ -203,21 +209,52 @@ Interpretation:
 - a full `fp64` sensitivity run on the current regional control path has also now been falsified as a primary fix:
   - `USE_DOUBLE=ON` on H100 reproduced the `fp32` control to reported precision at `+15 min`, `+30 min`, and `+1 h`
   - this means precision is not the current bottleneck on the surviving eastern-PA case
-- the next cleaner experimental lever is now the `no-fast-math` sensitivity, followed by the columnwise semi-implicit `p-w` corrector if math-mode sensitivity is flat
+
+### `exp/no-slow-w-metric`
+
+- commit: `2bded52`
+- intent:
+  - move the slow terrain-coupled `w` source path closer to interface semantics without touching boundaries or moisture transport
+  - current branch changes are focused on interface buoyancy and interface pressure-metric `w_tend`
+- result so far:
+  - eastern-PA static `+15 min` and `+30 min` came back essentially flat to slightly worse than the surviving control
+  - eastern-PA static `+1 h` on H100 also came back mixed rather than clearly positive:
+    - `mean_w = +0.041 m/s`
+    - `mean|w| = 1.028 m/s`
+    - `max|w| = 36.80 m/s`
+    - `U/V/THETA rmse = 10.70 / 8.94 / 29.28`
+    - `outer_20 qtot_d = -5.29%`
+    - `interior qtot_d = -23.73%`
+  - compared with the best static control at `+1 h`:
+    - `U` improves slightly
+    - `V`, `THETA`, `max|w|`, and interior moisture drift are flat to worse
+- interpretation:
+  - this is not a breakthrough branch
+  - it is still useful because it narrows the failure away from `fp64`, away from pressure-only fast boundaries, and away from direct moisture rewrites
+  - the next bounded branch is now `exp/w-interface-guardrails`, not more `no-slow` variations
 
 ## Fresh Moonshot Directions
 
-Current moonshot ranking after the latest negative results:
+Current moonshot ranking after the latest negative and mixed results:
 
-1. `no-fast-math` regional sensitivity
-   - rationale: the latest external review explicitly called global CUDA `--use_fast_math` out as suspicious, while `fp64` has now been shown not to matter on the surviving `+1 h` case
+1. `exp/w-interface-guardrails`
+   - rationale: the latest external review and the mixed `no-slow` result both point at the remaining `w` guardrail path:
+     - `w` still shares generic mass-field diffusion
+     - `w` still shares mass-style Rayleigh damping
+     - `w` still shares mass-style sanitize
+   - branch status: pushed and staged on both H100 nodes
+2. `no-fast-math` regional sensitivity
+   - rationale: global CUDA `--use_fast_math` is still a plausible blunt-error amplifier, while `fp64` has now been shown not to matter on the surviving `+1 h` case
    - active test: local RTX 5090 `dt=6`, `alpha=6.0`, `blend=1.0`, eastern Pennsylvania `+1 h`
-2. columnwise semi-implicit vertical acoustic `p-w` corrector
-   - rationale: the smallest serious numerics jump that could beat another damping sweep is a one-thread-per-column tridiagonal solve for the stiff vertical acoustic pair
-   - this is now the first large moonshot branch worth serious coding time if the `no-fast-math` sensitivity is flat
-3. revisit moisture transport only after the failure mechanism is narrower
+3. columnwise semi-implicit vertical acoustic `p-w` corrector
+   - rationale: the smallest serious numerics jump that could beat another damping sweep is now explicit enough to prototype:
+     - one thread per `(i,j)` column
+     - backward-Euler solve for the coupled vertical fast `p'-w` pair during each acoustic substep
+     - leave slow `w` terms, moisture transport, sponge, and boundaries unchanged in v1
+   - this remains the first large moonshot branch worth serious coding time if `w-interface-guardrails` stays flat
+4. revisit moisture transport only after the failure mechanism is narrower
    - rationale: the direct conservative moisture branches already failed
-   - the next moisture experiment should be driven by a sharper mechanism diagnosis, not another blind transport rewrite
+   - the next moisture experiment should be driven by a proper density/thickness-weighted water budget, not another blind transport rewrite
 
 ## Immediate Next Work
 
