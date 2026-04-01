@@ -58,6 +58,7 @@ On the local Windows workstation:
 - repo root: for example `C:\Users\drew\gpu-wm`
 - tracked tick script: `tools/ops/local_worker_tick.ps1`
 - tracked installer: `tools/ops/install_local_worker_task.ps1`
+- collected plot staging: `node_plots\`
 - queue file: `output/watchdog/local_queue.txt`
 - worker log: `output/watchdog/local_tick.log`
 - per-job logs: `output/watchdog/local_jobs\`
@@ -111,6 +112,7 @@ Good queue items:
 - one run tag
 - one clear log artifact
 - for serious regional runs, include postprocess so the job yields plots as well as NetCDF
+- after meaningful regional runs, refresh `node_plots/` so the latest visuals are in one predictable place
 
 Examples:
 
@@ -145,6 +147,14 @@ The fastest path is usually:
 - copy one boundary binary once
 - run many ablations locally on the node
 - collect only compact summaries
+
+For plot collection, run:
+
+```bash
+python tools/collect_node_plots.py
+```
+
+That refreshes `node_plots/` with the latest local and node-backed weather panels and collages without trying to commit generated PNGs.
 
 ## What Workers Should Run First
 
