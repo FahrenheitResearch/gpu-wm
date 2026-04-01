@@ -43,6 +43,9 @@ apt-get install -y --no-install-recommends \
   build-essential \
   cmake \
   git \
+  libeccodes-dev \
+  libnetcdf-c++4-dev \
+  libnetcdf-dev \
   ninja-build \
   python3-venv \
   python3-pip \

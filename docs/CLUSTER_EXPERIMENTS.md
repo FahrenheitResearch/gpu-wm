@@ -85,6 +85,11 @@ The script assumes:
 - `nvidia-smi` works
 - CUDA toolkit / `nvcc` is available on the node image
 
+The bootstrap script also installs the native development packages needed for:
+
+- NetCDF output
+- ecCodes / GRIB support
+
 If a provider image does not include CUDA build tooling, fix the image first. Do not solve that ad hoc per experiment.
 
 For the local Windows workstation, install the `10 minute` worker tick with:
