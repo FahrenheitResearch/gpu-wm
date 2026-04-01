@@ -6,6 +6,26 @@ Last updated: 2026-04-01
 
 `gpu-wm` is a real CUDA regional-model prototype. It is still below WRF-quality on forecast realism and robustness, but it has now crossed an important threshold on the active branch: the eastern Pennsylvania `768 x 640 x 50 @ 4 km` real-data case can survive to `+1 h` instead of catastrophically blowing up.
 
+The newest important change is on `exp/semiimplicit-pw-column@5126c38`:
+
+- the first columnwise semi-implicit fast `p-w` prototype is the strongest solver-side regional result yet
+- on the eastern Pennsylvania static `+1 h` case at `dt=6`, `alpha=6.0`, `blend=1.0`, it improved materially versus the surviving explicit control:
+  - `U/V/THETA rmse = 3.51 / 4.09 / 10.21`
+  - `mean|w| = 0.158`
+  - `max|w| = 6.28`
+  - `outer_20 qtot_burden_d = -0.32%`
+  - `interior qtot_burden_d = -4.93%`
+- that is a non-incremental gain over the current explicit control family, which was still closer to:
+  - `U/V/THETA ~ 10-11 / 8-9 / 29-30`
+  - `mean|w| ~ 1.0`
+  - `interior qtot_burden_d ~ -26%`
+- the same first prototype is not yet a universal win:
+  - the free-stream terrain regression stayed clean
+  - but `stretch_900` regressed, with `mean|w| = 4.26` and strongly positive tracer drift
+- interpretation:
+  - the semi-implicit seam is now the leading solver path
+  - but the first backward-Euler prototype still needs refinement before promotion
+
 The strongest public baseline on `main` is:
 
 - commit: `d92bef2`
@@ -56,6 +76,16 @@ The latest GPT-5.4 Pro review on `main@d92bef2` concluded:
   - tracked cluster-worker bootstrap and queue docs are now in-repo
 - current result:
   - this is the first branch to keep the eastern Pennsylvania `768 x 640 x 50 @ 4 km` case numerically healthy through `+1 h`
+
+### `exp/semiimplicit-pw-column`
+
+- commit: `5126c38`
+- change:
+  - add a runtime-gated columnwise semi-implicit replacement for the explicit fast vertical `p-w` trio inside `run_vertical_acoustic_substeps()`
+  - keep the existing explicit path intact as the control path
+- current result:
+  - strongest East-PA static `+1 h` result so far
+  - not ready for promotion yet because the first prototype still regresses `stretch_900`
 
 ## Best Verified Canonical Gate Result So Far
 
@@ -118,6 +148,14 @@ Additional regional signal:
   - `outer_20 qtot_d = -7.98%`
   - `interior qtot_d = -27.04%`
   - interpretation: the branch is no longer failing by immediate runaway, but the same interior moisture/thermal drift pattern is still present beyond `+1 h`
+- the semi-implicit prototype changes that picture sharply on the static `+1 h` regional case:
+  - `mean_w = +0.0015 m/s`
+  - `mean|w| = 0.1580 m/s`
+  - `max|w| = 6.28 m/s`
+  - `U/V/THETA rmse = 3.51 / 4.09 / 10.21`
+  - `outer_20 qtot_burden_d = -0.32%`
+  - `interior qtot_burden_d = -4.93%`
+  - interpretation: this is the first branch that looks like a non-incremental solver gain on the real East-PA target, not just another neutral cleanup
 
 Ops note:
 
@@ -159,6 +197,12 @@ Most likely current blocker order:
 4. startup imbalance, now lower priority than the interior drift
 
 That means the next high-value implementation target is still dycore correctness, not new physics.
+
+Updated interpretation after `exp/semiimplicit-pw-column@5126c38`:
+
+1. the unresolved interior fast vertical coupling is now the most promising seam
+2. the first semi-implicit prototype still needs refinement so it stops regressing stretched canonical terrain-following gates
+3. scalar/moisture transport remains important, but no longer looks like the first lever on the East-PA target
 
 ## Rejected Follow-Up Branches
 

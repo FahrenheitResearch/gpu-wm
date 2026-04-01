@@ -187,6 +187,19 @@ Skeptical note:
 - It is also the easiest idea here to burn a week on if the algebra is not
   careful.
 
+Current status:
+
+- first prototype now exists on `exp/semiimplicit-pw-column@5126c38`
+- it is already a real regional solver win on the East-PA static `+1 h` case:
+  - `U/V/THETA rmse = 3.51 / 4.09 / 10.21`
+  - `mean|w| = 0.158`
+  - `outer_20 qtot_burden_d = -0.32%`
+  - `interior qtot_burden_d = -4.93%`
+- that same prototype still regresses `stretch_900`
+- interpretation:
+  - this idea is promoted from moonshot to active mainline solver path
+  - the next refinement should target why the regional real-data case improves while the stretched canonical gate regresses
+
 ### 4. Precomputed Face-Geometry Cache with Discrete Metric Identity Checks
 
 Category: solver correctness
