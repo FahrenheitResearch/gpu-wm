@@ -48,11 +48,14 @@ The latest GPT-5.4 Pro review on `main@d92bef2` concluded:
 
 ### `exp/openbc-no-w-relax`
 
-- commit: `a0b798a`
+- commit: `8f445ae`
 - change:
   - stop relaxing open-boundary interface `w` toward the parent/boundary snapshot
 - current purpose:
   - test whether freeing lateral `w` removes a major terrain-following regional instability source
+- current result:
+  - this branch is the first one to keep the eastern Pennsylvania `768 x 640 x 50 @ 4 km` case numerically healthy through `+1 h`
+  - both local RTX 5090 and remote H100 reached `+1 h` without runaway `w/p`
 
 ## Best Verified Canonical Gate Result So Far
 
@@ -71,11 +74,11 @@ These matched on both:
 - local RTX 5090
 - remote H100 NVL
 
-## Biggest Current Failure
+## Current Regional Reality
 
-Large real-data regional runs are still not trustworthy.
+Medium real-data regional runs are now materially better on `exp/openbc-no-w-relax`.
 
-The key known failure case is the eastern Pennsylvania 4 km terrain-following regional setup:
+The eastern Pennsylvania 4 km terrain-following regional setup:
 
 - grid: `768 x 640 x 50`
 - data: `2026-04-01 00z` GFS-derived init
@@ -83,15 +86,19 @@ The key known failure case is the eastern Pennsylvania 4 km terrain-following re
 
 Current behavior:
 
-- canonical gates can pass
-- this larger real-data case still blows up badly by `+1 h`
-- both the local RTX 5090 and the remote H100 reproduced the failure
+- the current branch survives to `+1 h` on both local RTX 5090 and remote H100
+- representative `dt=8`, `alpha=6.0`, `blend=1.0` results at `+1 h`:
+  - `mean_w=+0.506 m/s`
+  - `mean|w|=1.697 m/s`
+  - `max|w|=18.28 m/s`
+  - `U/V/THETA rmse = 12.60 / 8.56 / 33.03`
+- boundary-forced local and static remote runs matched closely at this horizon
 
 Interpretation:
 
-- the boundary/sponge cleanup is real progress
-- but it is not enough by itself
-- the next likely blocker is startup balance, especially continuity-consistent interface `w`
+- freeing lateral `w` was a major regional-stability lever
+- the model is no longer in the old “instant catastrophic blow-up” regime on this case
+- the next step is to reduce drift and thermodynamic error, not just survive
 
 ## Immediate Next Work
 
@@ -105,7 +112,7 @@ The next implementation target is:
    - eastern Pennsylvania `+1 h` static case
    - eastern Pennsylvania `+1 h` boundary-forced case
 
-If that still fails, the next target after startup balance is dedicated interface-aware `w` open-boundary handling instead of generic scalar semantics.
+If startup-balanced `w` materially improves `+1 h`, the next target after that is dedicated interface-aware `w` open-boundary handling instead of generic scalar semantics.
 
 ## Experiment Discipline
 
