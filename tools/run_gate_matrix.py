@@ -19,7 +19,10 @@ RUN_FAST_CASE = REPO_ROOT / "tools" / "run_fast_case.py"
 
 PROFILE_ARGS: Dict[str, List[str]] = {
     "baseline": [],
-    "wdamp": ["--w-damp", "--w-damp-alpha", "3.0", "--w-damp-beta", "0.0"],
+    # Strongest known w-damp setting that still passes the stretched 15 min,
+    # 1 h, and 6 h gate set as of 2026-03-31.
+    "wdamp": ["--w-damp", "--w-damp-alpha", "6.0", "--w-damp-beta", "0.0"],
+    "wdamp-legacy": ["--w-damp", "--w-damp-alpha", "3.0", "--w-damp-beta", "0.0"],
     "wdamp-moderate": ["--w-damp", "--w-damp-alpha", "2.0", "--w-damp-beta", "0.2"],
 }
 

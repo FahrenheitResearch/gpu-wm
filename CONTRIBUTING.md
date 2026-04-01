@@ -96,7 +96,13 @@ python3 tools/run_gate_matrix.py --profile wdamp --include-6h
 ```
 
 That runs the canonical 64x64x20 terrain-following cases and fails if the
-current `w`/RMSE envelope regresses. Use `--no-enforce` for comparison-only runs.
+current `w`/RMSE envelope regresses. The `wdamp` profile tracks the current
+best-known vertical `w` damping setting. Use `--no-enforce` for comparison-only
+runs.
+
+As of `2026-03-31`, `--w-damp-alpha 7.0 --w-damp-beta 0.0` improves the 120 s
+smokes but fails the stretched 15 min / 1 h gates, so keep the canonical
+profile at `6.0 / 0.0` until the dycore is stronger.
 
 ## Precision Stance
 
