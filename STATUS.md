@@ -57,6 +57,46 @@ The latest GPT-5.4 Pro review on `main@d92bef2` concluded:
 - current result:
   - this is the first branch to keep the eastern Pennsylvania `768 x 640 x 50 @ 4 km` case numerically healthy through `+1 h`
 
+### `exp/fast-p-radbc`
+
+- commit: `d40fd31`
+- intent:
+  - make the fast acoustic open-boundary refresh less reflective by replacing
+    zero-gradient copy with the same blended linear extrapolation shape used by
+    the stage-level open-boundary path
+- current result:
+  - not a breakthrough so far
+  - the local `dt=6`, `alpha=6.0` eastern-PA run matches the
+    `exp/openbc-no-w-relax` control exactly to printed precision through
+    `+30 min`
+  - one clean remote direct-launch result has not been secured yet, so this is
+    currently a neutral side probe, not the new baseline
+
+### `exp/no-slow-w-metric`
+
+- commit: `2aaaca9`
+- intent:
+  - move the slow `w` source terms off the mass grid in two places:
+    - buoyancy now forces interface `w_tend` from adjacent mass-level averages
+    - the pressure-gradient metric contribution to `w_tend` now uses a
+      dedicated interface kernel instead of the mass-level pressure kernel
+- current result:
+  - compiles cleanly
+  - queued next on the local workstation after the current pressure-boundary run
+  - staged and built on the second H100 so it can launch immediately after the
+    current precision sensitivity run finishes
+
+### `fp64` sensitivity
+
+- branch/worktree:
+  - remote worker-only build in `/root/gpu-wm-fp64`
+- current result:
+  - early signal is neutral
+  - the eastern-PA `dt=6`, `alpha=6.0` run matches the float32 control exactly
+    to printed precision at `+15 min`
+  - current interpretation: the blocker is still solver/operator correctness,
+    not bulk precision
+
 ## Best Verified Canonical Gate Result So Far
 
 The strongest canonical-gate breakthrough so far came from the pressure-free boundary / sponge cleanup.
@@ -192,7 +232,9 @@ Interpretation:
 
 - moisture transport is still implicated in the regional drift story
 - but these two direct conservative rewrites are not the next lowest-risk branch
-- the next cleaner experimental lever is now the fast pressure radiative boundary branch, followed by the columnwise semi-implicit `p-w` corrector idea if that branch is flat or negative
+- the next cleaner structural lever is now the remaining slow-path `w`
+  source-term cleanup, with the fast pressure radiative boundary branch as a
+  side probe rather than the mainline fix
 
 ## Fresh Moonshot Directions
 
