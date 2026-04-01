@@ -254,6 +254,62 @@ def compute_health_metrics(state: Dict[str, np.ndarray]) -> Dict[str, float]:
     }
 
 
+def compute_regional_band_metrics(
+    fcst: Dict[str, np.ndarray], ref: Dict[str, np.ndarray], outer_band: int
+) -> Dict[str, Dict[str, float]]:
+    nx = int(fcst["nx"])
+    ny = int(fcst["ny"])
+    if outer_band <= 0 or outer_band * 2 >= nx or outer_band * 2 >= ny:
+        return {}
+
+    mask2d_outer = np.zeros((ny, nx), dtype=bool)
+    mask2d_outer[:outer_band, :] = True
+    mask2d_outer[-outer_band:, :] = True
+    mask2d_outer[:, :outer_band] = True
+    mask2d_outer[:, -outer_band:] = True
+    mask2d_inner = ~mask2d_outer
+
+    qtot_fcst = fcst["QV"] + fcst["QC"] + fcst["QR"]
+    qtot_ref = ref["QV"] + ref["QC"] + ref["QR"]
+    eps = 1.0e-12
+
+    def band_metrics(mask2d: np.ndarray) -> Dict[str, float]:
+        mask3d = np.broadcast_to(mask2d[np.newaxis, :, :], fcst["THETA"].shape)
+        fcst_u = fcst["U"][mask3d]
+        ref_u = ref["U"][mask3d]
+        fcst_v = fcst["V"][mask3d]
+        ref_v = ref["V"][mask3d]
+        fcst_th = fcst["THETA"][mask3d]
+        ref_th = ref["THETA"][mask3d]
+        fcst_qv = fcst["QV"][mask3d]
+        ref_qv = ref["QV"][mask3d]
+        fcst_w = fcst["W"][mask3d]
+        qtot_f = qtot_fcst[mask3d]
+        qtot_r = qtot_ref[mask3d]
+
+        qtot_ref_sum = float(np.sum(qtot_r))
+        qtot_fcst_sum = float(np.sum(qtot_f))
+        return {
+            "cells": int(mask3d.sum()),
+            "u_rmse": float(np.sqrt(np.mean((fcst_u - ref_u) ** 2))),
+            "v_rmse": float(np.sqrt(np.mean((fcst_v - ref_v) ** 2))),
+            "theta_rmse": float(np.sqrt(np.mean((fcst_th - ref_th) ** 2))),
+            "qv_rmse": float(np.sqrt(np.mean((fcst_qv - ref_qv) ** 2))),
+            "theta_bias": float(np.mean(fcst_th - ref_th)),
+            "mean_w": float(np.mean(fcst_w)),
+            "mean_abs_w": float(np.mean(np.abs(fcst_w))),
+            "max_abs_w": float(np.max(np.abs(fcst_w))),
+            "qtot_reference_sum": qtot_ref_sum,
+            "qtot_forecast_sum": qtot_fcst_sum,
+            "qtot_rel_change_pct": float(100.0 * (qtot_fcst_sum - qtot_ref_sum) / max(abs(qtot_ref_sum), eps)),
+        }
+
+    return {
+        f"outer_{outer_band}": band_metrics(mask2d_outer),
+        "interior": band_metrics(mask2d_inner),
+    }
+
+
 def evaluate_flags(
     health: Dict[str, float], ref_health: Dict[str, float]
 ) -> List[str]:
@@ -282,7 +338,7 @@ def evaluate_flags(
 
 
 def summarize_case(
-    fcst: Dict[str, np.ndarray], ref: Dict[str, np.ndarray]
+    fcst: Dict[str, np.ndarray], ref: Dict[str, np.ndarray], outer_band: int = 20
 ) -> Dict[str, object]:
     validate_compatibility(ref, fcst)
 
@@ -315,6 +371,10 @@ def summarize_case(
 
     for fcst_name, _ in FIELD_MAP:
         summary["full_volume"][fcst_name] = scalar_metrics(fcst[fcst_name], ref[fcst_name])
+
+    band_metrics = compute_regional_band_metrics(fcst, ref, outer_band)
+    if band_metrics:
+        summary["regional_bands"] = band_metrics
 
     summary["flags"] = evaluate_flags(summary["health"], ref_health)
     return summary
@@ -365,6 +425,23 @@ def print_summary(summary: Dict[str, object]) -> None:
             f"QV rmse={qv['rmse']:.5f}"
         )
 
+    regional_bands = summary.get("regional_bands")
+    if regional_bands:
+        ordered_band_names = sorted(
+            regional_bands.keys(),
+            key=lambda name: (0 if name.startswith("outer_") else 1, name),
+        )
+        for band_name in ordered_band_names:
+            band = regional_bands[band_name]
+            print(
+                f"  {band_name:8s} "
+                f"U rmse={band['u_rmse']:.2f}  "
+                f"V rmse={band['v_rmse']:.2f}  "
+                f"TH rmse={band['theta_rmse']:.2f}  "
+                f"mean|w|={band['mean_abs_w']:.3f}  "
+                f"qtot_d={band['qtot_rel_change_pct']:+.2f}%"
+            )
+
     flags = summary["flags"]
     if flags:
         print("  flags:  " + "; ".join(flags))
@@ -392,6 +469,12 @@ def main() -> None:
         "--json-out",
         help="Optional JSON output path",
     )
+    parser.add_argument(
+        "--outer-band",
+        type=int,
+        default=20,
+        help="Outer horizontal band width for regional drift diagnostics",
+    )
     args = parser.parse_args()
 
     if args.files:
@@ -410,7 +493,7 @@ def main() -> None:
     results = []
     for path in forecast_files:
         fcst = load_netcdf_state(path)
-        results.append(summarize_case(fcst, ref))
+        results.append(summarize_case(fcst, ref, outer_band=args.outer_band))
 
     print("=" * 88)
     print(f"GPU-WM verification  reference={ref['path']}")

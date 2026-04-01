@@ -122,6 +122,9 @@ Evidence from the eastern Pennsylvania `+1 h` case:
 - interior RMSE is worse than the outer relaxation band
 - `mean_w` and `THETA` drift grow monotonically rather than exploding in a late burst
 - domain `qtot` loss is large enough to suspect scalar/moisture transport drift, not just boundary export
+- new regional band diagnostics in `tools/verify_forecast.py` show the current `dt=8`, `alpha=6.0` case loses much more moisture in the interior than in the outer 20-cell band:
+  - `outer_20 qtot_d = -7.37%`
+  - `interior qtot_d = -24.92%`
 - startup-balanced `w` changes the initial state and startup diagnostics, but has not yet separated the `+1 h` metrics strongly on the tested `dt=8`, `alpha=8.0` case
 
 Most likely current blocker order:
