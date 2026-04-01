@@ -49,6 +49,10 @@ __device__ double upwind_flux(double vel, double f_m, double f_c, double f_p, do
     }
 }
 
+__device__ double upwind_face_flux(double vel, double left_state, double right_state) {
+    return vel > 0.0 ? vel * left_state : vel * right_state;
+}
+
 __device__ inline double clamped_column_terrain(
     const real_t* __restrict__ terrain,
     int i, int j, int nx,
@@ -284,6 +288,29 @@ __device__ inline double interface_field_at_mass_level(
         (double)field[idx3w(i, j, k, nx_h, ny_h)] +
         (double)field[idx3w(i, j, k + 1, nx_h, ny_h)]
     );
+}
+
+__device__ inline double physical_vertical_velocity_at_interface(
+    const real_t* __restrict__ u,
+    const real_t* __restrict__ v,
+    const real_t* __restrict__ omega,
+    const real_t* __restrict__ terrain,
+    const double* __restrict__ eta_w,
+    const double* __restrict__ mapfac_m,
+    int i, int j, int k_if,
+    int nx, int ny, int nz,
+    int nx_h, int ny_h,
+    double dx, double dy, double ztop
+) {
+    double mapfac = mapfac_m ? mapfac_m[max(0, min(j, ny - 1))] : 1.0;
+    double dx_eff = dx / mapfac;
+    double dy_eff = dy / mapfac;
+    double eta_if = eta_w[k_if];
+    double u_if = mass_field_at_interface(u, i, j, k_if, nz, nx_h, ny_h);
+    double v_if = mass_field_at_interface(v, i, j, k_if, nz, nx_h, ny_h);
+    double zx = local_metric_slope_x_at_eta(terrain, eta_if, i, j, nx, ny, dx_eff, ztop);
+    double zy = local_metric_slope_y_at_eta(terrain, eta_if, i, j, nx, ny, dy_eff, ztop);
+    return (double)omega[idx3w(i, j, k_if, nx_h, ny_h)] + u_if * zx + v_if * zy;
 }
 
 __device__ inline double centered_vertical_derivative(
@@ -645,18 +672,67 @@ __global__ void advection_w_interface_kernel(
     double mapfac = mapfac_m ? mapfac_m[j] : 1.0;
     double dx_eff = dx / mapfac;
     double dy_eff = dy / mapfac;
-    double eta_if = eta_w[k];
     double u_if = mass_field_at_interface(u, i, j, k, nz, nx_h, ny_h);
     double v_if = mass_field_at_interface(v, i, j, k, nz, nx_h, ny_h);
     double w_if = (double)w[ijk_w];
-    double dz_upwind = local_upwind_dz_interface(terrain, eta_w, i, j, k, nz, nx, ztop, w_if);
+    double h_c = local_column_depth(terrain, i, j, nx, ny, ztop);
+    double w_phys_c = physical_vertical_velocity_at_interface(
+        u, v, w, terrain, eta_w, mapfac_m, i, j, k, nx, ny, nz, nx_h, ny_h, dx, dy, ztop
+    );
+    double h_im = local_column_depth(terrain, i - 1, j, nx, ny, ztop);
+    double h_ip = local_column_depth(terrain, i + 1, j, nx, ny, ztop);
+    double h_jm = local_column_depth(terrain, i, j - 1, nx, ny, ztop);
+    double h_jp = local_column_depth(terrain, i, j + 1, nx, ny, ztop);
+    double w_phys_im = physical_vertical_velocity_at_interface(
+        u, v, w, terrain, eta_w, mapfac_m, i - 1, j, k, nx, ny, nz, nx_h, ny_h, dx, dy, ztop
+    );
+    double w_phys_ip = physical_vertical_velocity_at_interface(
+        u, v, w, terrain, eta_w, mapfac_m, i + 1, j, k, nx, ny, nz, nx_h, ny_h, dx, dy, ztop
+    );
+    double w_phys_jm = physical_vertical_velocity_at_interface(
+        u, v, w, terrain, eta_w, mapfac_m, i, j - 1, k, nx, ny, nz, nx_h, ny_h, dx, dy, ztop
+    );
+    double w_phys_jp = physical_vertical_velocity_at_interface(
+        u, v, w, terrain, eta_w, mapfac_m, i, j + 1, k, nx, ny, nz, nx_h, ny_h, dx, dy, ztop
+    );
+    double hw_c = h_c * w_phys_c;
+    double hw_im = h_im * w_phys_im;
+    double hw_ip = h_ip * w_phys_ip;
+    double hw_jm = h_jm * w_phys_jm;
+    double hw_jp = h_jp * w_phys_jp;
+
+    double u_face_hi = 0.5 * (u_if + mass_field_at_interface(u, i + 1, j, k, nz, nx_h, ny_h));
+    double u_face_lo = 0.5 * (mass_field_at_interface(u, i - 1, j, k, nz, nx_h, ny_h) + u_if);
+    double v_face_hi = 0.5 * (v_if + mass_field_at_interface(v, i, j + 1, k, nz, nx_h, ny_h));
+    double v_face_lo = 0.5 * (mass_field_at_interface(v, i, j - 1, k, nz, nx_h, ny_h) + v_if);
+
+    double fx_hi = upwind_face_flux(u_face_hi, hw_c, hw_ip);
+    double fx_lo = upwind_face_flux(u_face_lo, hw_im, hw_c);
+    double fy_hi = upwind_face_flux(v_face_hi, hw_c, hw_jp);
+    double fy_lo = upwind_face_flux(v_face_lo, hw_jm, hw_c);
+    double ax_new = (fx_hi - fx_lo) / (dx_eff * h_c);
+    double ay_new = (fy_hi - fy_lo) / (dy_eff * h_c);
+
+    double w_phys_km = physical_vertical_velocity_at_interface(
+        u, v, w, terrain, eta_w, mapfac_m, i, j, k - 1, nx, ny, nz, nx_h, ny_h, dx, dy, ztop
+    );
+    double w_phys_kp = physical_vertical_velocity_at_interface(
+        u, v, w, terrain, eta_w, mapfac_m, i, j, k + 1, nx, ny, nz, nx_h, ny_h, dx, dy, ztop
+    );
+    double omega_hi = 0.5 * (w_if + (double)w[idx3w(i, j, k + 1, nx_h, ny_h)]);
+    double omega_lo = 0.5 * ((double)w[idx3w(i, j, k - 1, nx_h, ny_h)] + w_if);
+    double fz_hi = upwind_face_flux(omega_hi, w_phys_c, w_phys_kp);
+    double fz_lo = upwind_face_flux(omega_lo, w_phys_km, w_phys_c);
+    double dz_center = local_centered_interface_dz(terrain, eta_w, i, j, k, nx, ztop);
+    double az_new = (fz_hi - fz_lo) / dz_center;
 
     #define FW(di, dj, dk) (double)w[idx3w(i+(di), j+(dj), k+(dk), nx_h, ny_h)]
+    double dz_upwind = local_upwind_dz_interface(terrain, eta_w, i, j, k, nz, nx, ztop, w_if);
+    double ax_old = advect_3rd(u_if, FW(-2,0,0), FW(-1,0,0), FW(0,0,0), FW(1,0,0), FW(2,0,0), dx_eff);
+    double ay_old = advect_3rd(v_if, FW(0,-2,0), FW(0,-1,0), FW(0,0,0), FW(0,1,0), FW(0,2,0), dy_eff);
+    double az_old = upwind_flux(w_if, FW(0,0,-1), FW(0,0,0), FW(0,0,1), dz_upwind);
 
-    double ax = advect_3rd(u_if, FW(-2,0,0), FW(-1,0,0), FW(0,0,0), FW(1,0,0), FW(2,0,0), dx_eff);
-    double ay = advect_3rd(v_if, FW(0,-2,0), FW(0,-1,0), FW(0,0,0), FW(0,1,0), FW(0,2,0), dy_eff);
-    double az = upwind_flux(w_if, FW(0,0,-1), FW(0,0,0), FW(0,0,1), dz_upwind);
-
+    double eta_if = eta_w[k];
     double zx_mm = local_metric_slope_x_at_eta(terrain, eta_if, i - 2, j, nx, ny, dx_eff, ztop);
     double zx_m = local_metric_slope_x_at_eta(terrain, eta_if, i - 1, j, nx, ny, dx_eff, ztop);
     double zx_c = local_metric_slope_x_at_eta(terrain, eta_if, i, j, nx, ny, dx_eff, ztop);
@@ -687,9 +763,13 @@ __global__ void advection_w_interface_kernel(
                + advect_3rd(v_if, zy_jmm, zy_jm, zy_c, zy_jp, zy_jpp, dy_eff)
                + upwind_flux(w_if, zy_km, zy_c, zy_kp, dz_upwind);
 
-    double metric_source = u_if * azx + v_if * azy;
-    w_tend[ijk_w] = (real_t)((double)w_tend[ijk_w] - (ax + ay + az) - metric_source);
+    double old_total = ax_old + ay_old + az_old + u_if * azx + v_if * azy;
+    double new_total = ax_new + ay_new + az_new;
+    constexpr double W_TRANSPORT_ERF_BLEND = 0.5;
+    double total = (1.0 - W_TRANSPORT_ERF_BLEND) * old_total
+                 + W_TRANSPORT_ERF_BLEND * new_total;
 
+    w_tend[ijk_w] = (real_t)((double)w_tend[ijk_w] - total);
     #undef FW
 }
 
