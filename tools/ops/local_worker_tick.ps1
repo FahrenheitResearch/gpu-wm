@@ -44,11 +44,7 @@ function Get-LocalGpu {
 
 function Get-LocalRuns {
     try {
-        $raw = (& wsl bash -lc "ps -eo pid,args" 2>$null | Out-String)
-        $lines = $raw -split "`r?`n" | Where-Object {
-            $_ -match 'build-wsl/gpu-wm|python3 tools/run_fast_case.py|python3 tools/run_gate_matrix.py|python3 tools/run_freestream_terrain.py'
-        }
-        return ($lines -join "`n").Trim()
+        return (& wsl bash -lc "pgrep -fa 'python3 tools/run_fast_case.py|python3 tools/run_gate_matrix.py|python3 tools/run_freestream_terrain.py|build-wsl/gpu-wm' || true" 2>$null | Out-String).Trim()
     } catch {
         return ""
     }
@@ -135,7 +131,7 @@ if ($localGpu -match ',\s*(\d+)\s*%,\s*(\d+)\s*MiB,') {
     $localUtil = [int]$Matches[1]
     $localMem = [int]$Matches[2]
 }
-$localBusy = (-not [string]::IsNullOrWhiteSpace($localRuns)) -or $localUtil -ge 20 -or $localMem -ge 10000
+$localBusy = (-not [string]::IsNullOrWhiteSpace($localRuns)) -or $localUtil -ge 20 -or $localMem -ge 6000
 Write-Log "local busy=$localBusy gpu=[$localGpu] runs=[$localRuns]"
 Write-Log "remote [$((Get-RemoteSummary))]"
 
