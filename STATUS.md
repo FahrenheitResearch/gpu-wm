@@ -32,6 +32,25 @@ The newest important change is on `exp/semiimplicit-pw-column@7c748cb`:
   - the semi-implicit seam is now the leading solver path
   - but the first backward-Euler prototype still needs refinement before promotion
 
+Newest refinement on top of that seam:
+
+- branch: `exp/semiimplicit-no-slow-metric@24d7eaf`
+- change:
+  - keep the semi-implicit column solve
+  - move the acoustic pressure-divergence damping inside the implicit path as a
+    coupled `p-w` correction, instead of solving `p/w` and then filtering only
+    `p`
+- East-PA static `+1 h` result improved again:
+  - `U/V/THETA rmse = 2.65 / 3.59 / 7.19`
+  - `mean|w| = 0.0855`
+  - `max|w| = 4.17`
+  - `outer_20 qtot_d = +0.76%`
+  - `interior qtot_d = +0.25%`
+- interpretation:
+  - the coupled-filter refinement is the best East-PA static `+1 h` result yet
+  - but it still does not cure `stretch_900`, which remains a distinct failure
+    mode
+
 There is now also a second realism benchmark active on the same branch:
 
 - Oklahoma / Texas Panhandles HRRR real-data case
@@ -109,6 +128,18 @@ The latest GPT-5.4 Pro review on `main@d92bef2` concluded:
   - not ready for promotion yet because the first prototype still regresses `stretch_900`
   - now also the active branch for the 4 km Panhandles HRRR realism benchmark
 
+### `exp/semiimplicit-no-slow-metric`
+
+- commit: `24d7eaf`
+- change:
+  - for the implicit path, damp the solved `p-w` correction pair directly
+  - remove the old "solve `p/w`, then filter only `p`" behavior
+- current result:
+  - best East-PA static `+1 h` result so far
+  - still fails `stretch_900`, with `mean|w| = 5.01`
+  - current role: strongest real-data refinement branch, not yet a universal
+    replacement for the first semi-implicit prototype
+
 ## Best Verified Canonical Gate Result So Far
 
 The strongest canonical-gate breakthrough so far came from the pressure-free boundary / sponge cleanup.
@@ -185,6 +216,15 @@ Additional regional signal:
   - `outer_20 qtot_d = -0.10%`
   - `interior qtot_d = -4.27%`
   - interpretation: this is no longer just a static-case win
+- the coupled-filter refinement improves the East-PA static `+1 h` case even
+  further:
+  - `mean|w| = 0.0855 m/s`
+  - `max|w| = 4.17 m/s`
+  - `U/V/THETA rmse = 2.65 / 3.59 / 7.19`
+  - `outer_20 qtot_d = +0.76%`
+  - `interior qtot_d = +0.25%`
+  - interpretation: the filter placement matters, and the semi-implicit path is
+    still improving on the actual East-PA target
 
 Ops note:
 

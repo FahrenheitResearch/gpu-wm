@@ -218,6 +218,24 @@ Newest narrowed refinement:
   - `stretch_900`
   - East-PA static `+1 h`
 
+Follow-up result:
+
+- suppressing the slow pressure-metric `w_tend` term did **not** fix
+  `stretch_900`
+- next narrowed seam was the post-solve filter itself:
+  - previous behavior: solve coupled column `p-w`, then damp only `p`
+  - refined behavior on `exp/semiimplicit-no-slow-metric@24d7eaf`:
+    - damp the solved `p-w` correction pair together inside the implicit path
+- result:
+  - East-PA static `+1 h` improved again to `U/V/THETA = 2.65 / 3.59 / 7.19`,
+    `mean|w| = 0.0855`
+  - `stretch_900` still fails with `mean|w| = 5.01`
+- interpretation:
+  - the semi-implicit path is still the right mainline seam
+  - there are at least two distinct problems:
+    1. real-data regional fast vertical coupling, now improving strongly
+    2. stretched canonical behavior, still unresolved
+
 ### 4. Precomputed Face-Geometry Cache with Discrete Metric Identity Checks
 
 Category: solver correctness
