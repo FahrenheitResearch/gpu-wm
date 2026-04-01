@@ -9,6 +9,7 @@ Last updated: 2026-04-01
 The design target is:
 
 - one controller that decides what to try next
+- one permanent moonshot research sidecar agent that keeps searching for high-upside ideas
 - many workers that:
   - keep the repo up to date
   - watch a queue file
@@ -33,6 +34,14 @@ This is intentionally simple. The worker should not try to be smart about scienc
 - logs keep being written
 - idle nodes do not stay idle for long
 
+The permanent moonshot sidecar agent has a different job:
+
+- keep scanning for high-upside algorithmic or physics ideas
+- turn those ideas into bounded experiments
+- never directly mutate the live worker queues without controller review
+
+During active pushes, the worker tick should stay installed on every active node. If a machine should pause, empty its queue instead of killing the tick.
+
 ## Standard Layout
 
 On each Linux worker:
@@ -43,6 +52,15 @@ On each Linux worker:
 - queue file: `/root/gpu-wm/output/watchdog/worker_queue.txt`
 - worker log: `/root/gpu-wm/output/watchdog/worker_tick.log`
 - per-job logs: `/root/gpu-wm/output/watchdog/remote_jobs/`
+
+On the local Windows workstation:
+
+- repo root: for example `C:\Users\drew\gpu-wm`
+- tracked tick script: `tools/ops/local_worker_tick.ps1`
+- tracked installer: `tools/ops/install_local_worker_task.ps1`
+- queue file: `output/watchdog/local_queue.txt`
+- worker log: `output/watchdog/local_tick.log`
+- per-job logs: `output/watchdog/local_jobs\`
 
 ## Install Standard
 
@@ -68,6 +86,14 @@ The script assumes:
 - CUDA toolkit / `nvcc` is available on the node image
 
 If a provider image does not include CUDA build tooling, fix the image first. Do not solve that ad hoc per experiment.
+
+For the local Windows workstation, install the `10 minute` worker tick with:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\ops\install_local_worker_task.ps1
+```
+
+That makes the workstation follow the same queue discipline as rented nodes instead of relying on hidden ad hoc scripts.
 
 ## Queue Discipline
 
@@ -125,6 +151,16 @@ Workers should always prefer the benchmark ladder:
 5. longer real-data runs only after the shorter case is clean
 
 Do not fill expensive nodes with long hero runs while the `+1 h` regional failure is still unresolved.
+
+## Controller Rules
+
+The controller should:
+
+- keep the local workstation and remote nodes busy unless they are intentionally paused
+- prefer one hypothesis per branch and one run per queue item
+- commit status updates whenever a result materially changes the diagnosis
+- converge workers onto the tracked `tools/ops/*` scripts instead of stale ad hoc watchdogs
+- let the moonshot sidecar generate ideas, but only promote ideas that survive the benchmark ladder
 
 ## Current Scientific Priority
 

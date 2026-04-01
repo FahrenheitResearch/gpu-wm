@@ -76,7 +76,7 @@ start_next_job() {
   stamp="$(date '+%Y%m%d_%H%M%S')"
   session="gpuwm-job-$stamp"
   joblog="$JOB_LOG_DIR/$stamp.log"
-  tmux new-session -d -s "$session" "cd '$REPO_ROOT' && (source /root/gpuwm-venv/bin/activate 2>/dev/null || true; $cmd) >> '$joblog' 2>&1"
+  tmux new-session -d -s "$session" "cd '$REPO_ROOT' && (export PYTHONUNBUFFERED=1; source /root/gpuwm-venv/bin/activate 2>/dev/null || true; $cmd) >> '$joblog' 2>&1"
   log "started session=$session log=$joblog cmd=$cmd"
 }
 

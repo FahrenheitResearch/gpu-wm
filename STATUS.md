@@ -48,10 +48,11 @@ The latest GPT-5.4 Pro review on `main@d92bef2` concluded:
 
 ### `exp/openbc-no-w-relax`
 
-- commit: `8e0ec7b`
+- commit: `f77a2b8`
 - changes of interest:
   - stop relaxing open-boundary interface `w` toward the parent/boundary snapshot
   - startup-balanced interface `w` initialization is active for loaded real-data states
+  - startup balance diagnostics now report raw vs balanced top-interface residuals and post-correction divergence
   - tracked cluster-worker bootstrap and queue docs are now in-repo
 - current result:
   - this is the first branch to keep the eastern Pennsylvania `768 x 640 x 50 @ 4 km` case numerically healthy through `+1 h`
@@ -96,21 +97,57 @@ Current behavior:
 Interpretation:
 
 - freeing lateral `w` was a major regional-stability lever
-- startup-balanced interface `w` removed the old catastrophic `+1 h` failure mode
+- startup-balanced interface `w` removed the old catastrophic `+1 h` failure mode, but has looked mostly neutral on the surviving `+1 h` branch so far
 - the project is now in a "survives but drifts" regime instead of an "instant blow-up" regime on this case
 - the next problem is quality and longer-horizon robustness, not immediate `w/p` runaway at `+1 h`
+
+Additional regional signal:
+
+- the best regional control so far is the H100 static `dt=6`, `alpha=6.0`, `blend=1.0` run:
+  - `mean_w = +0.240 m/s`
+  - `mean|w| = 1.085 m/s`
+  - `max|w| = 34.58 m/s`
+  - `U/V/THETA rmse = 11.09 / 8.23 / 29.08`
+- stronger damping at `alpha=8.0` did not clearly beat `alpha=6.0`
+- static and boundary-forced `dt=8`, `alpha=6.0` runs matched closely at `+1 h`, which weakens the case that the first-hour failure is boundary-driven
+
+## Current Drift Diagnosis
+
+The current branch is no longer dominated by immediate boundary blow-up. The remaining drift looks mostly interior and terrain-coupled.
+
+Evidence from the eastern Pennsylvania `+1 h` case:
+
+- static and boundary-forced runs are very close at `+1 h`
+- errors are worse over high terrain than low terrain
+- interior RMSE is worse than the outer relaxation band
+- `mean_w` and `THETA` drift grow monotonically rather than exploding in a late burst
+- domain `qtot` loss is large enough to suspect scalar/moisture transport drift, not just boundary export
+- startup-balanced `w` changes the initial state and startup diagnostics, but has not yet separated the `+1 h` metrics strongly on the tested `dt=8`, `alpha=8.0` case
+
+Most likely current blocker order:
+
+1. remaining slow-path `w` kernels that still behave like mass-level operators over terrain
+2. scalar/moisture transport drift, especially domain `qtot` loss on regional runs
+3. contradictory boundary / sponge semantics, now secondary at `+1 h` but still wrong
+4. startup imbalance, now lower priority than the interior drift
+
+That means the next high-value implementation target is still dycore correctness, not new physics.
 
 ## Immediate Next Work
 
 The next implementation target is:
 
-1. finish the `+1 h` confirmation matrix now in progress:
-   - H100 boundary-forced `dt=8`
-   - local boundary-forced `dt=8`, stronger `w` damping
-   - `dt=6` regional follow-ups only if they buy real quality, not just extra margin
-2. promote the eastern Pennsylvania case from "survives `+1 h`" to a cleaner `+3 h` / `+6 h` signal
-3. keep tightening startup and boundary diagnostics so drift sources are measurable
-4. after that, try the smallest dedicated interface-aware lateral `w` boundary operator instead of generic scalar semantics
+1. finish the `+1 h` confirmation matrix now in progress on both the local 5090 and the H100:
+   - boundary-forced `dt=6`, `alpha=6.0`
+   - boundary-forced `dt=8`, `alpha=6.0`
+   - static `dt=6` follow-ups only if they buy real quality, not just margin
+2. patch the remaining slow-path `w` kernels to true interface semantics, starting with:
+   - `pressure_gradient_kernel()` `w_tend`
+   - `buoyancy_kernel()`
+   - dedicated interface-aware `w` diffusion / sanitize / Rayleigh
+3. add one interior-vs-outer budget diagnostic for `qtot` and `THETA` so regional drift is measurable, not guessed
+4. keep startup diagnostics in place, but do not treat startup balance alone as the main explanation anymore
+5. after the slow `w` cleanup, revisit a dedicated interface-aware lateral `w` boundary operator instead of generic scalar semantics
 
 ## Experiment Discipline
 

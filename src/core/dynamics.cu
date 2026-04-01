@@ -1474,6 +1474,18 @@ __global__ void initialize_w_from_continuity_kernel(
     int nx, int ny, int nz,
     double dx, double dy, double ztop
 ) {
+    enum StartupBalanceMetric {
+        METRIC_TOP_RAW_SUM = 0,
+        METRIC_TOP_RAW_MAX = 1,
+        METRIC_TOP_BAL_SUM = 2,
+        METRIC_TOP_BAL_MAX = 3,
+        METRIC_DIV_BAL_SUM = 4,
+        METRIC_DIV_BAL_MAX = 5,
+        METRIC_COLUMN_COUNT = 6,
+        METRIC_CELL_COUNT = 7,
+        METRIC_HDIV_SUM = 8
+    };
+
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     int j = blockIdx.y * blockDim.y + threadIdx.y;
     if (i >= nx || j >= ny) return;
@@ -1498,9 +1510,9 @@ __global__ void initialize_w_from_continuity_kernel(
 
     double top_raw = w_if;
     double sum_abs_hdiv = 0.0;
-    atomicAdd(&metrics[0], fabs(top_raw));
-    atomicMax((unsigned long long*)&metrics[1], __double_as_longlong(fabs(top_raw)));
-    atomicAdd(&metrics[4], 1.0);
+    atomicAdd(&metrics[METRIC_TOP_RAW_SUM], fabs(top_raw));
+    atomicMax((unsigned long long*)&metrics[METRIC_TOP_RAW_MAX], __double_as_longlong(fabs(top_raw)));
+    atomicAdd(&metrics[METRIC_COLUMN_COUNT], 1.0);
 
     double eta_lo = eta_w[0];
     double eta_hi = eta_w[nz];
@@ -1513,6 +1525,9 @@ __global__ void initialize_w_from_continuity_kernel(
 
     w[idx3w(i, j, 0,  nx_h, ny_h)] = (real_t)0.0;
     w[idx3w(i, j, nz, nx_h, ny_h)] = (real_t)0.0;
+    double top_balanced = (double)w[idx3w(i, j, nz, nx_h, ny_h)];
+    atomicAdd(&metrics[METRIC_TOP_BAL_SUM], fabs(top_balanced));
+    atomicMax((unsigned long long*)&metrics[METRIC_TOP_BAL_MAX], __double_as_longlong(fabs(top_balanced)));
 
     for (int k = 0; k < nz; ++k) {
         double hdiv = generalized_horizontal_divergence(
@@ -1523,11 +1538,11 @@ __global__ void initialize_w_from_continuity_kernel(
         double dwdz = ((double)w[idx3w(i, j, k + 1, nx_h, ny_h)] -
                        (double)w[idx3w(i, j, k,     nx_h, ny_h)]) / dz_cell;
         double div = hdiv + dwdz;
-        atomicAdd(&metrics[2], fabs(div));
-        atomicMax((unsigned long long*)&metrics[3], __double_as_longlong(fabs(div)));
-        atomicAdd(&metrics[5], 1.0);
+        atomicAdd(&metrics[METRIC_DIV_BAL_SUM], fabs(div));
+        atomicMax((unsigned long long*)&metrics[METRIC_DIV_BAL_MAX], __double_as_longlong(fabs(div)));
+        atomicAdd(&metrics[METRIC_CELL_COUNT], 1.0);
     }
-    atomicAdd(&metrics[6], sum_abs_hdiv);
+    atomicAdd(&metrics[METRIC_HDIV_SUM], sum_abs_hdiv);
 }
 
 __global__ void open_fast_bc_x_kernel(real_t* __restrict__ field, int nx, int ny, int nz) {
@@ -1718,6 +1733,18 @@ void convert_w_to_contravariant(StateGPU& state, const GridConfig& grid) {
 }
 
 void initialize_w_from_continuity(StateGPU& state, const GridConfig& grid, const char* label) {
+    enum StartupBalanceMetric {
+        METRIC_TOP_RAW_SUM = 0,
+        METRIC_TOP_RAW_MAX = 1,
+        METRIC_TOP_BAL_SUM = 2,
+        METRIC_TOP_BAL_MAX = 3,
+        METRIC_DIV_BAL_SUM = 4,
+        METRIC_DIV_BAL_MAX = 5,
+        METRIC_COLUMN_COUNT = 6,
+        METRIC_CELL_COUNT = 7,
+        METRIC_HDIV_SUM = 8
+    };
+
     int nx = grid.nx;
     int ny = grid.ny;
     int nz = grid.nz;
@@ -1726,7 +1753,7 @@ void initialize_w_from_continuity(StateGPU& state, const GridConfig& grid, const
     dim3 grid_ij((nx + 15) / 16, (ny + 15) / 16);
 
     double* d_metrics = nullptr;
-    double zero[7] = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+    double zero[9] = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
     CUDA_CHECK(cudaMalloc(&d_metrics, sizeof(zero)));
     CUDA_CHECK(cudaMemcpy(d_metrics, zero, sizeof(zero), cudaMemcpyHostToDevice));
 
@@ -1739,20 +1766,23 @@ void initialize_w_from_continuity(StateGPU& state, const GridConfig& grid, const
         nx, ny, nz, grid.dx, grid.dy, grid.ztop
     );
 
-    double host_metrics[7];
+    double host_metrics[9];
     CUDA_CHECK(cudaMemcpy(host_metrics, d_metrics, sizeof(host_metrics), cudaMemcpyDeviceToHost));
     CUDA_CHECK(cudaFree(d_metrics));
 
-    double column_count = fmax(host_metrics[4], 1.0);
-    double cell_count = fmax(host_metrics[5], 1.0);
-    printf("Startup w-balance [%s]: mean|w_top_raw|=%.4e m/s, max|w_top_raw|=%.4e m/s, "
-           "mean|hdiv|=%.4e s^-1, mean|div|=%.4e s^-1, max|div|=%.4e s^-1\n",
+    double column_count = fmax(host_metrics[METRIC_COLUMN_COUNT], 1.0);
+    double cell_count = fmax(host_metrics[METRIC_CELL_COUNT], 1.0);
+    printf("Startup w-balance [%s]: mean|w_top_raw|=%.4e m/s, mean|w_top_bal|=%.4e m/s, "
+           "max|w_top_raw|=%.4e m/s, max|w_top_bal|=%.4e m/s, "
+           "mean|hdiv|=%.4e s^-1, mean|div_bal|=%.4e s^-1, max|div_bal|=%.4e s^-1\n",
            label ? label : "state",
-           host_metrics[0] / column_count,
-           host_metrics[1],
-           host_metrics[6] / cell_count,
-           host_metrics[2] / cell_count,
-           host_metrics[3]);
+           host_metrics[METRIC_TOP_RAW_SUM] / column_count,
+           host_metrics[METRIC_TOP_BAL_SUM] / column_count,
+           host_metrics[METRIC_TOP_RAW_MAX],
+           host_metrics[METRIC_TOP_BAL_MAX],
+           host_metrics[METRIC_HDIV_SUM] / cell_count,
+           host_metrics[METRIC_DIV_BAL_SUM] / cell_count,
+           host_metrics[METRIC_DIV_BAL_MAX]);
 }
 
 // ----------------------------------------------------------
