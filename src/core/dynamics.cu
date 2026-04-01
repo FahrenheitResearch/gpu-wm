@@ -916,6 +916,77 @@ __global__ void advection_scalar_kernel(
 }
 
 // ----------------------------------------------------------
+// Moisture-only transformed conservative transport
+// ----------------------------------------------------------
+// This aligns qv/qc/qr with the same h-weighted horizontal divergence and
+// interface-w vertical flux skeleton used by the pressure continuity update.
+// Theta stays on the legacy scalar kernel for the first prototype so the
+// experiment only answers whether moisture drift is mainly a transport-form
+// mismatch rather than a general scalar rewrite issue.
+__global__ void advection_moisture_conservative_kernel(
+    const real_t* __restrict__ scalar,
+    const real_t* __restrict__ u,
+    const real_t* __restrict__ v,
+    const real_t* __restrict__ w,
+    real_t* __restrict__ scalar_tend,
+    const real_t* __restrict__ terrain,
+    const double* __restrict__ eta_w,
+    const double* __restrict__ mapfac_m,
+    int nx, int ny, int nz,
+    double dx, double dy,
+    double ztop
+) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    int j = blockIdx.y * blockDim.y + threadIdx.y;
+    int k = blockIdx.z * blockDim.z + threadIdx.z;
+
+    if (i >= nx || j >= ny || k < 1 || k >= nz - 1) return;
+
+    int nx_h = nx + 4, ny_h = ny + 4;
+    int ijk = idx3(i, j, k, nx_h, ny_h);
+    double mapfac = mapfac_m ? mapfac_m[j] : 1.0;
+    double dx_eff = dx / mapfac;
+    double dy_eff = dy / mapfac;
+
+    double q_c = (double)scalar[ijk];
+    double q_im = (double)scalar[idx3(i - 1, j, k, nx_h, ny_h)];
+    double q_ip = (double)scalar[idx3(i + 1, j, k, nx_h, ny_h)];
+    double q_jm = (double)scalar[idx3(i, j - 1, k, nx_h, ny_h)];
+    double q_jp = (double)scalar[idx3(i, j + 1, k, nx_h, ny_h)];
+    double q_km = (double)scalar[idx3(i, j, k - 1, nx_h, ny_h)];
+    double q_kp = (double)scalar[idx3(i, j, k + 1, nx_h, ny_h)];
+
+    double h_c = local_column_depth(terrain, i, j, nx, ny, ztop);
+    double h_im = local_column_depth(terrain, i - 1, j, nx, ny, ztop);
+    double h_ip = local_column_depth(terrain, i + 1, j, nx, ny, ztop);
+    double h_jm = local_column_depth(terrain, i, j - 1, nx, ny, ztop);
+    double h_jp = local_column_depth(terrain, i, j + 1, nx, ny, ztop);
+
+    double u_c = (double)u[ijk];
+    double v_c = (double)v[ijk];
+    double u_face_hi = 0.5 * (u_c + (double)u[idx3(i + 1, j, k, nx_h, ny_h)]);
+    double u_face_lo = 0.5 * ((double)u[idx3(i - 1, j, k, nx_h, ny_h)] + u_c);
+    double v_face_hi = 0.5 * (v_c + (double)v[idx3(i, j + 1, k, nx_h, ny_h)]);
+    double v_face_lo = 0.5 * ((double)v[idx3(i, j - 1, k, nx_h, ny_h)] + v_c);
+
+    double fx_hi = upwind_face_flux(u_face_hi, h_c * q_c, h_ip * q_ip);
+    double fx_lo = upwind_face_flux(u_face_lo, h_im * q_im, h_c * q_c);
+    double fy_hi = upwind_face_flux(v_face_hi, h_c * q_c, h_jp * q_jp);
+    double fy_lo = upwind_face_flux(v_face_lo, h_jm * q_jm, h_c * q_c);
+    double adv_h = (fx_hi - fx_lo) / (dx_eff * h_c)
+                 + (fy_hi - fy_lo) / (dy_eff * h_c);
+
+    double omega_hi = (double)w[idx3w(i, j, k + 1, nx_h, ny_h)];
+    double omega_lo = (double)w[idx3w(i, j, k, nx_h, ny_h)];
+    double fz_hi = upwind_face_flux(omega_hi, q_c, q_kp);
+    double fz_lo = upwind_face_flux(omega_lo, q_km, q_c);
+    double dz_cell = local_mass_cell_thickness(terrain, eta_w, i, j, k, nx, ztop);
+    double adv_z = (fz_hi - fz_lo) / dz_cell;
+
+    scalar_tend[ijk] = (real_t)((double)scalar_tend[ijk] - (adv_h + adv_z));
+}
+
+// ----------------------------------------------------------
 // Buoyancy
 // ----------------------------------------------------------
 // Buoyancy is evaluated at the interface between mass levels k-1 and k
@@ -1875,15 +1946,27 @@ void compute_tendencies(StateGPU& state, const GridConfig& grid,
     advection_scalar_kernel<<<grid3d, block>>>(
         state.theta, state.u, state.v, state.w, state.theta_tend,
         state.terrain, state.eta_m, grid.mapfac_m, nx, ny, nz, grid.dx, grid.dy, grid.ztop);
-    advection_scalar_kernel<<<grid3d, block>>>(
-        state.qv, state.u, state.v, state.w, state.qv_tend,
-        state.terrain, state.eta_m, grid.mapfac_m, nx, ny, nz, grid.dx, grid.dy, grid.ztop);
-    advection_scalar_kernel<<<grid3d, block>>>(
-        state.qc, state.u, state.v, state.w, state.qc_tend,
-        state.terrain, state.eta_m, grid.mapfac_m, nx, ny, nz, grid.dx, grid.dy, grid.ztop);
-    advection_scalar_kernel<<<grid3d, block>>>(
-        state.qr, state.u, state.v, state.w, state.qr_tend,
-        state.terrain, state.eta_m, grid.mapfac_m, nx, ny, nz, grid.dx, grid.dy, grid.ztop);
+    if (stability_cfg.conservative_moisture_transport) {
+        advection_moisture_conservative_kernel<<<grid3d, block>>>(
+            state.qv, state.u, state.v, state.w, state.qv_tend,
+            state.terrain, state.eta, grid.mapfac_m, nx, ny, nz, grid.dx, grid.dy, grid.ztop);
+        advection_moisture_conservative_kernel<<<grid3d, block>>>(
+            state.qc, state.u, state.v, state.w, state.qc_tend,
+            state.terrain, state.eta, grid.mapfac_m, nx, ny, nz, grid.dx, grid.dy, grid.ztop);
+        advection_moisture_conservative_kernel<<<grid3d, block>>>(
+            state.qr, state.u, state.v, state.w, state.qr_tend,
+            state.terrain, state.eta, grid.mapfac_m, nx, ny, nz, grid.dx, grid.dy, grid.ztop);
+    } else {
+        advection_scalar_kernel<<<grid3d, block>>>(
+            state.qv, state.u, state.v, state.w, state.qv_tend,
+            state.terrain, state.eta_m, grid.mapfac_m, nx, ny, nz, grid.dx, grid.dy, grid.ztop);
+        advection_scalar_kernel<<<grid3d, block>>>(
+            state.qc, state.u, state.v, state.w, state.qc_tend,
+            state.terrain, state.eta_m, grid.mapfac_m, nx, ny, nz, grid.dx, grid.dy, grid.ztop);
+        advection_scalar_kernel<<<grid3d, block>>>(
+            state.qr, state.u, state.v, state.w, state.qr_tend,
+            state.terrain, state.eta_m, grid.mapfac_m, nx, ny, nz, grid.dx, grid.dy, grid.ztop);
+    }
 
     // Buoyancy
     buoyancy_kernel<<<grid3d, block>>>(
