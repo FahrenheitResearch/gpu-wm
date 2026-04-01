@@ -75,6 +75,12 @@ def load_netcdf_state(path: str) -> Dict[str, np.ndarray]:
         "QC": np.array(ds.variables["QC"][:], dtype=np.float64),
         "QR": np.array(ds.variables["QR"][:], dtype=np.float64),
     }
+    if "RHO" in ds.variables:
+        data["RHO"] = np.array(ds.variables["RHO"][:], dtype=np.float64)
+    if "eta" in ds.variables:
+        data["eta"] = np.array(ds.variables["eta"][:], dtype=np.float64)
+    if "eta_w" in ds.variables:
+        data["eta_w"] = np.array(ds.variables["eta_w"][:], dtype=np.float64)
     if "TERRAIN" in ds.variables:
         data["terrain"] = np.array(ds.variables["TERRAIN"][:], dtype=np.float64)
     if "TERRAIN_SLOPE" in ds.variables:
@@ -259,7 +265,11 @@ def compute_health_metrics(state: Dict[str, np.ndarray]) -> Dict[str, float]:
 
 
 def compute_regional_band_metrics(
-    fcst: Dict[str, np.ndarray], ref: Dict[str, np.ndarray], outer_band: int
+    fcst: Dict[str, np.ndarray],
+    ref: Dict[str, np.ndarray],
+    outer_band: int,
+    qtot_burden_fcst: np.ndarray | None = None,
+    qtot_burden_ref: np.ndarray | None = None,
 ) -> Dict[str, Dict[str, float]]:
     nx = int(fcst["nx"])
     ny = int(fcst["ny"])
@@ -276,7 +286,14 @@ def compute_regional_band_metrics(
     eps = 1.0e-12
 
     def band_metrics(mask2d: np.ndarray) -> Dict[str, float]:
-        return compute_mask_metrics(fcst, ref, mask2d, eps)
+        return compute_mask_metrics(
+            fcst,
+            ref,
+            mask2d,
+            eps,
+            qtot_burden_fcst=qtot_burden_fcst,
+            qtot_burden_ref=qtot_burden_ref,
+        )
 
     return {
         f"outer_{outer_band}": band_metrics(mask2d_outer),
@@ -289,6 +306,8 @@ def compute_mask_metrics(
     ref: Dict[str, np.ndarray],
     mask2d: np.ndarray,
     eps: float = 1.0e-12,
+    qtot_burden_fcst: np.ndarray | None = None,
+    qtot_burden_ref: np.ndarray | None = None,
 ) -> Dict[str, float]:
     qtot_fcst = fcst["QV"] + fcst["QC"] + fcst["QR"]
     qtot_ref = ref["QV"] + ref["QC"] + ref["QR"]
@@ -308,7 +327,7 @@ def compute_mask_metrics(
 
     qtot_ref_sum = float(np.sum(qtot_r))
     qtot_fcst_sum = float(np.sum(qtot_f))
-    return {
+    metrics = {
         "cells": int(mask3d.sum()),
         "u_rmse": float(np.sqrt(np.mean((fcst_u - ref_u) ** 2))),
         "v_rmse": float(np.sqrt(np.mean((fcst_v - ref_v) ** 2))),
@@ -322,12 +341,24 @@ def compute_mask_metrics(
         "qtot_forecast_sum": qtot_fcst_sum,
         "qtot_rel_change_pct": float(100.0 * (qtot_fcst_sum - qtot_ref_sum) / max(abs(qtot_ref_sum), eps)),
     }
+    if qtot_burden_fcst is not None and qtot_burden_ref is not None:
+        burden_ref_mean = float(np.mean(qtot_burden_ref[mask2d]))
+        burden_fcst_mean = float(np.mean(qtot_burden_fcst[mask2d]))
+        metrics["qtot_burden_reference_kgm2"] = burden_ref_mean
+        metrics["qtot_burden_forecast_kgm2"] = burden_fcst_mean
+        metrics["qtot_burden_diff_kgm2"] = burden_fcst_mean - burden_ref_mean
+        metrics["qtot_burden_rel_change_pct"] = float(
+            100.0 * (burden_fcst_mean - burden_ref_mean) / max(abs(burden_ref_mean), eps)
+        )
+    return metrics
 
 
 def compute_terrain_band_metrics(
     fcst: Dict[str, np.ndarray],
     ref: Dict[str, np.ndarray],
     outer_band: int,
+    qtot_burden_fcst: np.ndarray | None = None,
+    qtot_burden_ref: np.ndarray | None = None,
 ) -> Dict[str, object]:
     terrain = fcst.get("terrain")
     if terrain is None:
@@ -369,7 +400,14 @@ def compute_terrain_band_metrics(
             full_mask = region_mask & band_mask
             if not np.any(full_mask):
                 continue
-            metrics = compute_mask_metrics(fcst, ref, full_mask, eps)
+            metrics = compute_mask_metrics(
+                fcst,
+                ref,
+                full_mask,
+                eps,
+                qtot_burden_fcst=qtot_burden_fcst,
+                qtot_burden_ref=qtot_burden_ref,
+            )
             metrics["terrain_mean_m"] = float(np.mean(terrain[full_mask]))
             metrics["terrain_min_m"] = float(np.min(terrain[full_mask]))
             metrics["terrain_max_m"] = float(np.max(terrain[full_mask]))
@@ -377,6 +415,28 @@ def compute_terrain_band_metrics(
         results[region_name] = region_info
 
     return results
+
+
+def compute_qtot_column_burden(
+    state: Dict[str, np.ndarray],
+    rho_field: np.ndarray,
+    terrain: np.ndarray,
+    eta_w: np.ndarray,
+    ztop: float,
+) -> np.ndarray | None:
+    qtot = state["QV"] + state["QC"] + state["QR"]
+    eta_w_arr = np.asarray(eta_w, dtype=np.float64)
+    if qtot.ndim != 3 or rho_field.shape != qtot.shape:
+        return None
+    if terrain.ndim != 2 or qtot.shape[1:] != terrain.shape:
+        return None
+    if eta_w_arr.ndim != 1 or eta_w_arr.size != qtot.shape[0] + 1:
+        return None
+
+    delta_eta = np.diff(eta_w_arr)
+    column_depth = np.maximum(float(ztop) - terrain, 1.0)
+    dz = delta_eta[:, np.newaxis, np.newaxis] * column_depth[np.newaxis, :, :]
+    return np.sum(rho_field * qtot * dz, axis=0)
 
 
 def evaluate_flags(
@@ -441,11 +501,45 @@ def summarize_case(
     for fcst_name, _ in FIELD_MAP:
         summary["full_volume"][fcst_name] = scalar_metrics(fcst[fcst_name], ref[fcst_name])
 
-    band_metrics = compute_regional_band_metrics(fcst, ref, outer_band)
+    qtot_burden_fcst = None
+    qtot_burden_ref = None
+    geom_terrain = fcst.get("terrain", ref.get("terrain"))
+    geom_eta_w = fcst.get("eta_w", ref.get("eta_w"))
+    geom_ztop = fcst.get("ztop", ref.get("ztop"))
+    rho_fcst = fcst.get("RHO")
+    rho_ref = ref.get("RHO", rho_fcst)
+    if (
+        geom_terrain is not None
+        and geom_eta_w is not None
+        and geom_ztop is not None
+        and rho_fcst is not None
+    ):
+        qtot_burden_fcst = compute_qtot_column_burden(fcst, rho_fcst, geom_terrain, geom_eta_w, float(geom_ztop))
+        qtot_burden_ref = compute_qtot_column_burden(
+            ref,
+            rho_ref if rho_ref is not None else rho_fcst,
+            geom_terrain,
+            geom_eta_w,
+            float(geom_ztop),
+        )
+
+    band_metrics = compute_regional_band_metrics(
+        fcst,
+        ref,
+        outer_band,
+        qtot_burden_fcst=qtot_burden_fcst,
+        qtot_burden_ref=qtot_burden_ref,
+    )
     if band_metrics:
         summary["regional_bands"] = band_metrics
 
-    terrain_band_metrics = compute_terrain_band_metrics(fcst, ref, outer_band)
+    terrain_band_metrics = compute_terrain_band_metrics(
+        fcst,
+        ref,
+        outer_band,
+        qtot_burden_fcst=qtot_burden_fcst,
+        qtot_burden_ref=qtot_burden_ref,
+    )
     if terrain_band_metrics:
         summary["terrain_bands"] = terrain_band_metrics
 
@@ -460,6 +554,11 @@ def format_value(value: float, fmt: str) -> str:
 
 
 def print_summary(summary: Dict[str, object]) -> None:
+    def format_qtot_drift(metrics: Dict[str, object]) -> str:
+        if "qtot_burden_rel_change_pct" in metrics:
+            return f"qtot_burden_d={metrics['qtot_burden_rel_change_pct']:+.2f}%"
+        return f"qtot_d={metrics['qtot_rel_change_pct']:+.2f}%"
+
     print(f"{summary['path']}  t={summary['time_hours']:.2f} h")
 
     health = summary["health"]
@@ -512,7 +611,7 @@ def print_summary(summary: Dict[str, object]) -> None:
                 f"V rmse={band['v_rmse']:.2f}  "
                 f"TH rmse={band['theta_rmse']:.2f}  "
                 f"mean|w|={band['mean_abs_w']:.3f}  "
-                f"qtot_d={band['qtot_rel_change_pct']:+.2f}%"
+                f"{format_qtot_drift(band)}"
             )
 
     terrain_bands = summary.get("terrain_bands")
@@ -534,7 +633,7 @@ def print_summary(summary: Dict[str, object]) -> None:
                     f"    {band_name:2s} zbar={band['terrain_mean_m']:.0f} m  "
                     f"TH rmse={band['theta_rmse']:.2f}  "
                     f"mean|w|={band['mean_abs_w']:.3f}  "
-                    f"qtot_d={band['qtot_rel_change_pct']:+.2f}%"
+                    f"{format_qtot_drift(band)}"
                 )
 
     flags = summary["flags"]
