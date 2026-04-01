@@ -6,7 +6,7 @@ Last updated: 2026-04-01
 
 `gpu-wm` is a real CUDA regional-model prototype. It is still below WRF-quality on forecast realism and robustness, but it has now crossed an important threshold on the active branch: the eastern Pennsylvania `768 x 640 x 50 @ 4 km` real-data case can survive to `+1 h` instead of catastrophically blowing up.
 
-The newest important change is on `exp/semiimplicit-pw-column@5126c38`:
+The newest important change is on `exp/semiimplicit-pw-column@7c748cb`:
 
 - the first columnwise semi-implicit fast `p-w` prototype is the strongest solver-side regional result yet
 - on the eastern Pennsylvania static `+1 h` case at `dt=6`, `alpha=6.0`, `blend=1.0`, it improved materially versus the surviving explicit control:
@@ -15,6 +15,12 @@ The newest important change is on `exp/semiimplicit-pw-column@5126c38`:
   - `max|w| = 6.28`
   - `outer_20 qtot_burden_d = -0.32%`
   - `interior qtot_burden_d = -4.93%`
+- the same branch also now validates on the eastern Pennsylvania boundary-forced `+1 h` case:
+  - `U/V/THETA rmse = 3.52 / 4.10 / 10.23`
+  - `mean|w| = 0.158`
+  - `max|w| = 6.43`
+  - `outer_20 qtot_d = -0.10%`
+  - `interior qtot_d = -4.27%`
 - that is a non-incremental gain over the current explicit control family, which was still closer to:
   - `U/V/THETA ~ 10-11 / 8-9 / 29-30`
   - `mean|w| ~ 1.0`
@@ -25,6 +31,21 @@ The newest important change is on `exp/semiimplicit-pw-column@5126c38`:
 - interpretation:
   - the semi-implicit seam is now the leading solver path
   - but the first backward-Euler prototype still needs refinement before promotion
+
+There is now also a second realism benchmark active on the same branch:
+
+- Oklahoma / Texas Panhandles HRRR real-data case
+- grid: `512 x 384 x 50 @ 4 km`
+- init/boundary pair: `2026-04-01 19z` HRRR `f00` + `f03`
+- local `+1 h` result from the first mirror run:
+  - `U/V/THETA rmse = 2.64 / 2.95 / 7.81`
+  - `mean|w| = 0.157`
+  - `max|w| = 5.18`
+  - `outer_20 qtot_burden_d = -0.15%`
+  - `interior qtot_burden_d = -1.37%`
+- interpretation:
+  - the semi-implicit branch is not just surviving a terrain-stress case
+  - it is now also producing a plausible short-range 4 km Plains benchmark from latest HRRR data
 
 The strongest public baseline on `main` is:
 
@@ -79,13 +100,14 @@ The latest GPT-5.4 Pro review on `main@d92bef2` concluded:
 
 ### `exp/semiimplicit-pw-column`
 
-- commit: `5126c38`
+- commit: `7c748cb`
 - change:
   - add a runtime-gated columnwise semi-implicit replacement for the explicit fast vertical `p-w` trio inside `run_vertical_acoustic_substeps()`
   - keep the existing explicit path intact as the control path
 - current result:
-  - strongest East-PA static `+1 h` result so far
+  - strongest East-PA static and boundary-forced `+1 h` results so far
   - not ready for promotion yet because the first prototype still regresses `stretch_900`
+  - now also the active branch for the 4 km Panhandles HRRR realism benchmark
 
 ## Best Verified Canonical Gate Result So Far
 
@@ -156,6 +178,13 @@ Additional regional signal:
   - `outer_20 qtot_burden_d = -0.32%`
   - `interior qtot_burden_d = -4.93%`
   - interpretation: this is the first branch that looks like a non-incremental solver gain on the real East-PA target, not just another neutral cleanup
+- the same branch now matches that gain on the boundary-forced `+1 h` East-PA case:
+  - `mean|w| = 0.1583 m/s`
+  - `max|w| = 6.43 m/s`
+  - `U/V/THETA rmse = 3.52 / 4.10 / 10.23`
+  - `outer_20 qtot_d = -0.10%`
+  - `interior qtot_d = -4.27%`
+  - interpretation: this is no longer just a static-case win
 
 Ops note:
 

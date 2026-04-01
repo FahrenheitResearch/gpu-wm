@@ -1146,6 +1146,7 @@ __global__ void pressure_gradient_kernel(
     const real_t* __restrict__ terrain,
     const double* __restrict__ eta_m,
     const double* __restrict__ mapfac_m,
+    int apply_w_metric,
     int nx, int ny, int nz, double dx, double dy, double ztop
 ) {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
@@ -1181,9 +1182,11 @@ __global__ void pressure_gradient_kernel(
     u_tend[ijk] = (real_t)((double)u_tend[ijk] - inv_rho * dpdx);
     v_tend[ijk] = (real_t)((double)v_tend[ijk] - inv_rho * dpdy);
 
-    // Contravariant w tendency: -(zx * du/dt_PG + zy * dv/dt_PG)
-    //   = inv_rho * (zx * dpdx + zy * dpdy)
-    w_tend[ijk] = (real_t)((double)w_tend[ijk] + inv_rho * (zx * dpdx + zy * dpdy));
+    if (apply_w_metric) {
+        // Contravariant w tendency: -(zx * du/dt_PG + zy * dv/dt_PG)
+        //   = inv_rho * (zx * dpdx + zy * dpdy)
+        w_tend[ijk] = (real_t)((double)w_tend[ijk] + inv_rho * (zx * dpdx + zy * dpdy));
+    }
 }
 
 __global__ void acoustic_vertical_pg_kernel(
@@ -1969,10 +1972,12 @@ void compute_tendencies(StateGPU& state, const GridConfig& grid,
     zero_field_kernel<<<grid1d, block1d>>>(state.qr_tend, n_total);
 
     // Pressure gradient force (from current p')
+    int apply_pressure_metric_w = !stability_cfg.pw_column_implicit;
     pressure_gradient_kernel<<<grid3d, block>>>(
         state.u_tend, state.v_tend, state.w_tend,
         state.p, state.rho,
         state.terrain, state.eta_m, grid.mapfac_m,
+        apply_pressure_metric_w,
         nx, ny, nz, grid.dx, grid.dy, grid.ztop);
 
     // Advection

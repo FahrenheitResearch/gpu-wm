@@ -200,6 +200,24 @@ Current status:
   - this idea is promoted from moonshot to active mainline solver path
   - the next refinement should target why the regional real-data case improves while the stretched canonical gate regresses
 
+Newest narrowed refinement:
+
+- the most likely remaining seam is the explicit terrain-pressure `w` metric kick
+  still added by `pressure_gradient_kernel()` while the column `p-w` solve is on
+- working hypothesis:
+  - the implicit column solve already handles the stiff vertical `p-w` response
+  - the leftover explicit pressure-to-`w` metric source then double-kicks or
+    misphases `w` on stretched columns
+- active next branch:
+  - `exp/semiimplicit-no-slow-metric`
+  - scope:
+    - when `--semiimplicit-pw` is active, suppress the explicit pressure metric
+      `w_tend` contribution from `pressure_gradient_kernel()`
+    - keep the rest of the semi-implicit path unchanged
+- decisive test:
+  - `stretch_900`
+  - East-PA static `+1 h`
+
 ### 4. Precomputed Face-Geometry Cache with Discrete Metric Identity Checks
 
 Category: solver correctness
