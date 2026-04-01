@@ -226,19 +226,20 @@ void apply_sponge(StateGPU& state, StateGPU& state_init,
         nx, ny, nz, grid.ztop, dt
     );
 
-    // --- Lateral sponge (all prognostic fields) ---
+    // --- Lateral sponge for advected fields only ---
+    // Pressure perturbation is left to the dedicated open-boundary path.
     real_t* fields[] = {
         state.u, state.v, state.w,
         state.theta,
-        state.qv, state.qc, state.qr, state.p
+        state.qv, state.qc, state.qr
     };
     real_t* fields_init[] = {
         state_init.u, state_init.v, state_init.w,
         state_init.theta,
-        state_init.qv, state_init.qc, state_init.qr, state_init.p
+        state_init.qv, state_init.qc, state_init.qr
     };
 
-    for (int f = 0; f < 8; f++) {
+    for (int f = 0; f < 7; f++) {
         lateral_sponge_kernel<<<grid3d, block>>>(
             fields[f], fields_init[f],
             nx, ny, nz, dt

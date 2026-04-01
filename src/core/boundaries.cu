@@ -272,24 +272,28 @@ void apply_open_boundaries(StateGPU& state, StateGPU& state_init,
     dim3 grid_jk_w((ny + 15) / 16, ((nz + 1) + 15) / 16);
     dim3 grid_ik_w((nx + 15) / 16, ((nz + 1) + 15) / 16);
 
-    // Apply open BCs: extrapolation + relaxation toward initial/boundary
-    // values for ALL prognostic fields including p'.
-    // Without time-varying lateral boundaries, p' needs constraint to
-    // prevent drift at the domain edges.
-    real_t* mass_fields[] = {state.u, state.v, state.theta,
-                             state.qv, state.qc, state.qr, state.p};
-    real_t* mass_fields_init[] = {state_init.u, state_init.v, state_init.theta,
-                                  state_init.qv, state_init.qc, state_init.qr, state_init.p};
+    // Relax only the materially advected mass-level fields plus interface w.
+    // Pressure perturbation is allowed to adjust more freely at the open
+    // boundary; it still gets extrapolated boundary values and halo refresh,
+    // but it is not nudged toward the boundary snapshot here.
+    real_t* relax_fields[] = {state.u, state.v, state.theta,
+                              state.qv, state.qc, state.qr};
+    real_t* relax_fields_init[] = {state_init.u, state_init.v, state_init.theta,
+                                   state_init.qv, state_init.qc, state_init.qr};
 
-    for (int f = 0; f < 7; f++) {
-        open_bc_x_kernel<<<grid_jk, block_jk>>>(mass_fields[f], nx, ny, nz);
-        open_bc_y_kernel<<<grid_ik, block_ik>>>(mass_fields[f], nx, ny, nz);
+    for (int f = 0; f < 6; f++) {
+        open_bc_x_kernel<<<grid_jk, block_jk>>>(relax_fields[f], nx, ny, nz);
+        open_bc_y_kernel<<<grid_ik, block_ik>>>(relax_fields[f], nx, ny, nz);
         relax_boundary_kernel<<<grid3d, block>>>(
-            mass_fields[f], mass_fields_init[f], nx, ny, nz, relax_width
+            relax_fields[f], relax_fields_init[f], nx, ny, nz, relax_width
         );
-        fill_halo_x_kernel<<<grid_jk, block_jk>>>(mass_fields[f], nx, ny, nz);
-        fill_halo_y_kernel<<<grid_ik, block_ik>>>(mass_fields[f], nx, ny, nz);
+        fill_halo_x_kernel<<<grid_jk, block_jk>>>(relax_fields[f], nx, ny, nz);
+        fill_halo_y_kernel<<<grid_ik, block_ik>>>(relax_fields[f], nx, ny, nz);
     }
+    open_bc_x_kernel<<<grid_jk, block_jk>>>(state.p, nx, ny, nz);
+    open_bc_y_kernel<<<grid_ik, block_ik>>>(state.p, nx, ny, nz);
+    fill_halo_x_kernel<<<grid_jk, block_jk>>>(state.p, nx, ny, nz);
+    fill_halo_y_kernel<<<grid_ik, block_ik>>>(state.p, nx, ny, nz);
     dim3 grid3d_w((nx + 7) / 8, (ny + 7) / 8, ((nz + 1) + 3) / 4);
     open_bc_x_kernel<<<grid_jk_w, block_jk>>>(state.w, nx, ny, nz + 1);
     open_bc_y_kernel<<<grid_ik_w, block_ik>>>(state.w, nx, ny, nz + 1);
