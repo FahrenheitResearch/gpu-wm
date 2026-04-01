@@ -8,8 +8,17 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CUDA_ARCHITECTURES native)
 
 # Optimization flags
-set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --use_fast_math -O3")
-set(CMAKE_CUDA_FLAGS_RELEASE "-O3 --use_fast_math")
+option(USE_FAST_MATH "Enable CUDA --use_fast_math optimizations" ON)
+set(_GPUWM_CUDA_OPT_FLAGS "-O3")
+if(USE_FAST_MATH)
+    list(APPEND _GPUWM_CUDA_OPT_FLAGS "--use_fast_math")
+    message(STATUS "CUDA fast math: ON")
+else()
+    message(STATUS "CUDA fast math: OFF")
+endif()
+string(REPLACE ";" " " _GPUWM_CUDA_OPT_FLAGS_STR "${_GPUWM_CUDA_OPT_FLAGS}")
+set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} ${_GPUWM_CUDA_OPT_FLAGS_STR}")
+set(CMAKE_CUDA_FLAGS_RELEASE "${_GPUWM_CUDA_OPT_FLAGS_STR}")
 
 # Find NetCDF
 find_path(NETCDF_INCLUDE_DIR netcdf.h)

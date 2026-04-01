@@ -69,6 +69,40 @@ Skeptical note:
 - That is still acceptable if it lets us reject the boundary hypothesis
   cheaply.
 
+Current status:
+
+- tested on `exp/fast-p-radbc@d40fd31`
+- failed the canonical gate filter:
+  - `uniform_120 mean|w| = 8.03` (`FAIL`)
+  - `stretch_900 mean|w| = 5.01` (`FAIL`)
+- also flipped stretched canonical `qtot` drift positive
+- the eastern Pennsylvania `+1 h` regional result came back effectively
+  identical to the current control
+- conclusion: demoted; do not spend more time here unless a stronger boundary
+  diagnosis emerges
+
+### 0.5. Full `fp64` Everywhere
+
+Category: sensitivity check, not a primary moonshot
+
+Why it was worth checking:
+
+- AMD/HPC hardware discussions kept raising the question of whether the current
+  failure mode is mostly precision-driven.
+- The latest external review explicitly warned against assuming that `fp64`
+  would fix a structurally wrong dycore.
+
+Current status:
+
+- tested as `USE_DOUBLE=ON` on H100 against the eastern Pennsylvania
+  `dt=6`, `alpha=6.0`, `blend=1.0` control
+- matched the `fp32` control to reported precision at:
+  - `+15 min`
+  - `+30 min`
+  - `+1 h`
+- conclusion: precision is not the current lever on the surviving regional
+  drift case; keep mixed precision as the baseline plan
+
 ### 1. Column Balance Startup Solve for `w` and `p'`
 
 Category: solver correctness

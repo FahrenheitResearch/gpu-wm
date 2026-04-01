@@ -192,18 +192,29 @@ Interpretation:
 
 - moisture transport is still implicated in the regional drift story
 - but these two direct conservative rewrites are not the next lowest-risk branch
-- the next cleaner experimental lever is now the fast pressure radiative boundary branch, followed by the columnwise semi-implicit `p-w` corrector idea if that branch is flat or negative
+- the fast pressure radiative boundary branch has now also been tested and demoted:
+  - `exp/fast-p-radbc@d40fd31` regressed the canonical gates enough to fail:
+    - `uniform_120 mean|w| = 8.03` (`FAIL`)
+    - `stretch_900 mean|w| = 5.01` (`FAIL`)
+  - it also flipped canonical moisture drift positive on the stretched gate:
+    - `outer_20 qtot_d = +19.61%`
+    - `interior qtot_d = +58.94%`
+  - despite that, the eastern Pennsylvania `+1 h` regional run came back effectively identical to the current control, so this is not the next lever
+- a full `fp64` sensitivity run on the current regional control path has also now been falsified as a primary fix:
+  - `USE_DOUBLE=ON` on H100 reproduced the `fp32` control to reported precision at `+15 min`, `+30 min`, and `+1 h`
+  - this means precision is not the current bottleneck on the surviving eastern-PA case
+- the next cleaner experimental lever is now the `no-fast-math` sensitivity, followed by the columnwise semi-implicit `p-w` corrector if math-mode sensitivity is flat
 
 ## Fresh Moonshot Directions
 
-Three fresh moonshot reviews are now concrete enough to test, in this order:
+Current moonshot ranking after the latest negative results:
 
-1. pressure-only radiative fast open boundary
-   - rationale: if a boundary experiment is going to matter, the cleanest first try is to make `p` less reflective during the fast acoustic refresh, not to fake a lateral `p-w` characteristic pair
-   - smallest branch: fast-step `p` strip-history / Orlanski-style radiation only; leave lateral `w` unchanged at first
+1. `no-fast-math` regional sensitivity
+   - rationale: the latest external review explicitly called global CUDA `--use_fast_math` out as suspicious, while `fp64` has now been shown not to matter on the surviving `+1 h` case
+   - active test: local RTX 5090 `dt=6`, `alpha=6.0`, `blend=1.0`, eastern Pennsylvania `+1 h`
 2. columnwise semi-implicit vertical acoustic `p-w` corrector
    - rationale: the smallest serious numerics jump that could beat another damping sweep is a one-thread-per-column tridiagonal solve for the stiff vertical acoustic pair
-   - this is larger than the first two ideas and should stay behind them unless the smaller transport/boundary experiments flatline
+   - this is now the first large moonshot branch worth serious coding time if the `no-fast-math` sensitivity is flat
 3. revisit moisture transport only after the failure mechanism is narrower
    - rationale: the direct conservative moisture branches already failed
    - the next moisture experiment should be driven by a sharper mechanism diagnosis, not another blind transport rewrite
@@ -212,17 +223,14 @@ Three fresh moonshot reviews are now concrete enough to test, in this order:
 
 The next implementation target is:
 
-1. finish the `+1 h` confirmation matrix now in progress on both the local 5090 and the H100:
-   - boundary-forced `dt=6`, `alpha=6.0`
-   - boundary-forced `dt=8`, `alpha=6.0`
-   - static `dt=6` follow-ups only if they buy real quality, not just margin
-2. patch the remaining slow-path `w` kernels to true interface semantics, starting with:
+1. finish the `no-fast-math` sensitivity now running on the local RTX 5090
+2. if `no-fast-math` is flat, patch the remaining slow-path `w` kernels to true interface semantics, starting with:
    - `pressure_gradient_kernel()` `w_tend`
    - `buoyancy_kernel()`
    - dedicated interface-aware `w` diffusion / sanitize / Rayleigh
-3. add one interior-vs-outer budget diagnostic for `qtot` and `THETA` so regional drift is measurable, not guessed
+3. keep the interior-vs-outer budget diagnostic for `qtot` and `THETA` as the acceptance lens for every new regional branch
 4. keep startup diagnostics in place, but do not treat startup balance alone as the main explanation anymore
-5. after the slow `w` cleanup, revisit a dedicated interface-aware lateral `w` boundary operator instead of generic scalar semantics
+5. hold the boundary moonshots until a branch can beat the current regional control without failing the canonical gates
 
 ## Experiment Discipline
 
