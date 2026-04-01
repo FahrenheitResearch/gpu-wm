@@ -1545,6 +1545,14 @@ __global__ void initialize_w_from_continuity_kernel(
     atomicAdd(&metrics[METRIC_HDIV_SUM], sum_abs_hdiv);
 }
 
+// Fast acoustic open-boundary refresh for pressure / interface-w fields.
+//
+// The split vertical acoustic loop refreshes p and w multiple times per RK
+// stage. Pure zero-gradient copy is cheap but reflective for the fast mode:
+// outgoing perturbations see an abrupt impedance jump at the boundary and can
+// re-enter the domain on the next substep. Reuse the same blended linear
+// extrapolation shape as the stage-level open boundary path so the fast refresh
+// is at least directionally transmissive instead of acting like a hard wall.
 __global__ void open_fast_bc_x_kernel(real_t* __restrict__ field, int nx, int ny, int nz) {
     int j = blockIdx.x * blockDim.x + threadIdx.x;
     int k = blockIdx.y * blockDim.y + threadIdx.y;
@@ -1552,10 +1560,24 @@ __global__ void open_fast_bc_x_kernel(real_t* __restrict__ field, int nx, int ny
 
     int nx_h = nx + 4;
     int ny_h = ny + 4;
-    field[idx3(0, j, k, nx_h, ny_h)] = field[idx3(1, j, k, nx_h, ny_h)];
+
+    {
+        double f1 = (double)field[idx3(1, j, k, nx_h, ny_h)];
+        double f2 = (double)field[idx3(2, j, k, nx_h, ny_h)];
+        double extrap = 2.0 * f1 - f2;
+        double val = 0.5 * extrap + 0.5 * f1;
+        field[idx3(0, j, k, nx_h, ny_h)] = (real_t)val;
+    }
     field[idx3(-1, j, k, nx_h, ny_h)] = field[idx3(0, j, k, nx_h, ny_h)];
     field[idx3(-2, j, k, nx_h, ny_h)] = field[idx3(0, j, k, nx_h, ny_h)];
-    field[idx3(nx - 1, j, k, nx_h, ny_h)] = field[idx3(nx - 2, j, k, nx_h, ny_h)];
+
+    {
+        double f1 = (double)field[idx3(nx - 2, j, k, nx_h, ny_h)];
+        double f2 = (double)field[idx3(nx - 3, j, k, nx_h, ny_h)];
+        double extrap = 2.0 * f1 - f2;
+        double val = 0.5 * extrap + 0.5 * f1;
+        field[idx3(nx - 1, j, k, nx_h, ny_h)] = (real_t)val;
+    }
     field[idx3(nx, j, k, nx_h, ny_h)] = field[idx3(nx - 1, j, k, nx_h, ny_h)];
     field[idx3(nx + 1, j, k, nx_h, ny_h)] = field[idx3(nx - 1, j, k, nx_h, ny_h)];
 }
@@ -1567,10 +1589,24 @@ __global__ void open_fast_bc_y_kernel(real_t* __restrict__ field, int nx, int ny
 
     int nx_h = nx + 4;
     int ny_h = ny + 4;
-    field[idx3(i, 0, k, nx_h, ny_h)] = field[idx3(i, 1, k, nx_h, ny_h)];
+
+    {
+        double f1 = (double)field[idx3(i, 1, k, nx_h, ny_h)];
+        double f2 = (double)field[idx3(i, 2, k, nx_h, ny_h)];
+        double extrap = 2.0 * f1 - f2;
+        double val = 0.5 * extrap + 0.5 * f1;
+        field[idx3(i, 0, k, nx_h, ny_h)] = (real_t)val;
+    }
     field[idx3(i, -1, k, nx_h, ny_h)] = field[idx3(i, 0, k, nx_h, ny_h)];
     field[idx3(i, -2, k, nx_h, ny_h)] = field[idx3(i, 0, k, nx_h, ny_h)];
-    field[idx3(i, ny - 1, k, nx_h, ny_h)] = field[idx3(i, ny - 2, k, nx_h, ny_h)];
+
+    {
+        double f1 = (double)field[idx3(i, ny - 2, k, nx_h, ny_h)];
+        double f2 = (double)field[idx3(i, ny - 3, k, nx_h, ny_h)];
+        double extrap = 2.0 * f1 - f2;
+        double val = 0.5 * extrap + 0.5 * f1;
+        field[idx3(i, ny - 1, k, nx_h, ny_h)] = (real_t)val;
+    }
     field[idx3(i, ny, k, nx_h, ny_h)] = field[idx3(i, ny - 1, k, nx_h, ny_h)];
     field[idx3(i, ny + 1, k, nx_h, ny_h)] = field[idx3(i, ny - 1, k, nx_h, ny_h)];
 }
