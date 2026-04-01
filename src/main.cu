@@ -325,6 +325,11 @@ int main(int argc, char** argv) {
             cfg.stability.w_transport_blend = std::max(0.0, std::min(1.0, cfg.stability.w_transport_blend));
         }
         else if (strcmp(argv[i], "--w-transport-diagnostics") == 0) cfg.stability.w_transport_diagnostics = 1;
+        else if (strcmp(argv[i], "--semiimplicit-pw") == 0) cfg.stability.pw_column_implicit = 1;
+        else if (strcmp(argv[i], "--semiimplicit-pw-diagnostics") == 0) {
+            cfg.stability.pw_column_implicit = 1;
+            cfg.stability.pw_column_diagnostics = 1;
+        }
         else if (strcmp(argv[i], "--hrrr") == 0) {
             // HRRR-like CONUS domain
             cfg.nx = 1799; cfg.ny = 1059; cfg.nz = 50;
@@ -367,6 +372,8 @@ int main(int argc, char** argv) {
             printf("  --w-damp-beta B     w damping activation CFL (default: 1.0)\n");
             printf("  --w-transport-blend B  Blend legacy and ERF-style w transport (0..1, default: 1.0)\n");
             printf("  --w-transport-diagnostics  Print interval diagnostics for old/new w transport terms\n");
+            printf("  --semiimplicit-pw   Replace the explicit fast vertical p-w pair with a column implicit solve\n");
+            printf("  --semiimplicit-pw-diagnostics  Enable the semi-implicit p-w path and extra diagnostics\n");
             printf("  --test N            Idealized test: 1=bubble 2=density-current 3=convection 4=free-stream-terrain\n\n");
             printf("Operational:\n");
             printf("  --hrrr              Full HRRR CONUS domain (1799x1059 @ 3km)\n");
@@ -458,6 +465,11 @@ int main(int argc, char** argv) {
         printf("\n");
         printf("w transport blend: %.2f", cfg.stability.w_transport_blend);
         if (cfg.stability.w_transport_diagnostics) {
+            printf(" (diagnostics on)");
+        }
+        printf("\n");
+        printf("semi-implicit p-w: %s", cfg.stability.pw_column_implicit ? "on" : "off");
+        if (cfg.stability.pw_column_diagnostics) {
             printf(" (diagnostics on)");
         }
         printf("\n");

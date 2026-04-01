@@ -29,6 +29,8 @@ static constexpr double ACOUSTIC_SMDIV = 0.10;
 
 namespace {
 
+constexpr int PW_COLUMN_MAX_NZ = 256;
+
 constexpr int W_TRANSPORT_DIAG_SUM_ABS_OLD = 0;
 constexpr int W_TRANSPORT_DIAG_SUM_ABS_NEW = 1;
 constexpr int W_TRANSPORT_DIAG_SUM_ABS_DELTA = 2;
@@ -1254,6 +1256,100 @@ __global__ void pressure_update_kernel(
     p_pert[ijk] = (real_t)((double)p_pert[ijk] + dp);
 }
 
+__global__ void semiimplicit_pw_column_kernel(
+    real_t* __restrict__ p_pert,
+    real_t* __restrict__ w,
+    const real_t* __restrict__ u,
+    const real_t* __restrict__ v,
+    const real_t* __restrict__ rho_ref,
+    const real_t* __restrict__ terrain,
+    const double* __restrict__ eta_m,
+    const double* __restrict__ eta_w,
+    const double* __restrict__ mapfac_m,
+    int nx, int ny, int nz,
+    double dx, double dy, double dt_ac,
+    double cs_eff2,
+    double ztop
+) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    int j = blockIdx.y * blockDim.y + threadIdx.y;
+    if (i >= nx || j >= ny || nz <= 0 || nz > PW_COLUMN_MAX_NZ) return;
+
+    int nx_h = nx + 4;
+    int ny_h = ny + 4;
+    double mapfac = mapfac_m ? mapfac_m[j] : 1.0;
+    double dx_eff = dx / mapfac;
+    double dy_eff = dy / mapfac;
+
+    double cprime[PW_COLUMN_MAX_NZ];
+    double dprime[PW_COLUMN_MAX_NZ];
+    double pnew[PW_COLUMN_MAX_NZ];
+
+    for (int k = 0; k < nz; ++k) {
+        int ijk = idx3(i, j, k, nx_h, ny_h);
+        double dz_cell = local_mass_cell_thickness(terrain, eta_w, i, j, k, nx, ztop);
+        double rho_cell = reference_density_from_field(rho_ref, i, j, k, nx_h, ny_h);
+        double hdiv = generalized_horizontal_divergence(
+            u, v, terrain, i, j, k, nx, ny, nx_h, ny_h, dx_eff, dy_eff, ztop
+        );
+        double old_dwdz = ((double)w[idx3w(i, j, k + 1, nx_h, ny_h)] -
+                           (double)w[idx3w(i, j, k, nx_h, ny_h)]) / dz_cell;
+        double rhs = (double)p_pert[ijk] - dt_ac * rho_cell * cs_eff2 * (hdiv + old_dwdz);
+
+        double beta_lo = 0.0;
+        if (k > 0) {
+            double dz_cc_lo = local_mass_center_spacing(terrain, eta_m, i, j, k, nx, ztop);
+            double rho_if_lo = reference_density_at_interface_from_field(rho_ref, i, j, k, nz, nx_h, ny_h);
+            beta_lo = dt_ac / (rho_if_lo * dz_cc_lo);
+        }
+
+        double beta_hi = 0.0;
+        if (k < nz - 1) {
+            double dz_cc_hi = local_mass_center_spacing(terrain, eta_m, i, j, k + 1, nx, ztop);
+            double rho_if_hi = reference_density_at_interface_from_field(rho_ref, i, j, k + 1, nz, nx_h, ny_h);
+            beta_hi = dt_ac / (rho_if_hi * dz_cc_hi);
+        }
+
+        double gamma = dt_ac * rho_cell * cs_eff2 / dz_cell;
+        double lower = -gamma * beta_lo;
+        double diag = 1.0 + gamma * (beta_lo + beta_hi);
+        double upper = -gamma * beta_hi;
+
+        if (k == 0) {
+            double denom = fabs(diag) > 1.0e-12 ? diag : (diag >= 0.0 ? 1.0e-12 : -1.0e-12);
+            cprime[k] = upper / denom;
+            dprime[k] = rhs / denom;
+        } else {
+            double denom = diag - lower * cprime[k - 1];
+            if (fabs(denom) < 1.0e-12) {
+                denom = denom >= 0.0 ? 1.0e-12 : -1.0e-12;
+            }
+            cprime[k] = upper / denom;
+            dprime[k] = (rhs - lower * dprime[k - 1]) / denom;
+        }
+    }
+
+    pnew[nz - 1] = dprime[nz - 1];
+    for (int k = nz - 2; k >= 0; --k) {
+        pnew[k] = dprime[k] - cprime[k] * pnew[k + 1];
+    }
+
+    for (int k = 0; k < nz; ++k) {
+        p_pert[idx3(i, j, k, nx_h, ny_h)] = (real_t)pnew[k];
+    }
+
+    w[idx3w(i, j, 0, nx_h, ny_h)] = (real_t)0.0;
+    w[idx3w(i, j, nz, nx_h, ny_h)] = (real_t)0.0;
+    for (int k_if = 1; k_if < nz; ++k_if) {
+        double dz_cc = local_mass_center_spacing(terrain, eta_m, i, j, k_if, nx, ztop);
+        double rho_if = reference_density_at_interface_from_field(rho_ref, i, j, k_if, nz, nx_h, ny_h);
+        double beta_if = dt_ac / (rho_if * dz_cc);
+        double w_old = (double)w[idx3w(i, j, k_if, nx_h, ny_h)];
+        double w_new = w_old - beta_if * (pnew[k_if] - pnew[k_if - 1]);
+        w[idx3w(i, j, k_if, nx_h, ny_h)] = (real_t)w_new;
+    }
+}
+
 // ----------------------------------------------------------
 // Standard kernels
 // ----------------------------------------------------------
@@ -1636,7 +1732,8 @@ void run_vertical_acoustic_substeps(
     double dt_rk,
     int acoustic_substeps,
     double cs_eff2,
-    bool use_open_bc
+    bool use_open_bc,
+    const StabilityControlConfig& stability_cfg
 ) {
     int nx = grid.nx;
     int ny = grid.ny;
@@ -1650,10 +1747,13 @@ void run_vertical_acoustic_substeps(
     dim3 block(8,8,4);
     dim3 grid3d((nx + 7) / 8, (ny + 7) / 8, (nz + 3) / 4);
     dim3 grid3d_w((nx + 7) / 8, (ny + 7) / 8, ((nz + 1) + 3) / 4);
+    dim3 block_col(8, 8);
+    dim3 grid2d_cols((nx + 7) / 8, (ny + 7) / 8);
     dim3 block_ij(16,16);
     dim3 grid_ij((nx + 15) / 16, (ny + 15) / 16);
     int block1d = 256;
     int grid1d = (n_total + block1d - 1) / block1d;
+    bool use_pw_column_implicit = stability_cfg.pw_column_implicit && nz <= PW_COLUMN_MAX_NZ;
 
     refresh_fast_field_boundaries(state.p, grid, use_open_bc, nz);
     refresh_fast_field_boundaries(state.w, grid, use_open_bc, nz + 1);
@@ -1664,35 +1764,49 @@ void run_vertical_acoustic_substeps(
     );
 
     for (int substep = 0; substep < acoustic_substeps; ++substep) {
-        acoustic_vertical_pg_kernel<<<grid3d_w, block>>>(
-            state.w, state.p, state.rho,
-            state.terrain, state.eta_m,
-            nx, ny, nz, 0.5 * dt_ac, grid.ztop
-        );
-        refresh_fast_field_boundaries(state.w, grid, use_open_bc, nz + 1);
-        bc_w_kernel<<<grid_ij, block_ij>>>(
-            state.w, state.u, state.v, state.terrain, state.eta_m, grid.mapfac_m,
-            nx, ny, nz, grid.dx, grid.dy, grid.ztop
-        );
+        if (use_pw_column_implicit) {
+            semiimplicit_pw_column_kernel<<<grid2d_cols, block_col>>>(
+                state.p, state.w,
+                state.u, state.v, state.rho,
+                state.terrain, state.eta_m, state.eta, grid.mapfac_m,
+                nx, ny, nz, grid.dx, grid.dy, dt_ac,
+                cs_eff2, grid.ztop
+            );
+            pressure_divergence_filter_kernel<<<grid1d, block1d>>>(
+                state.p, state.phi, ACOUSTIC_SMDIV, n_total
+            );
+            refresh_fast_field_boundaries(state.p, grid, use_open_bc, nz);
+        } else {
+            acoustic_vertical_pg_kernel<<<grid3d_w, block>>>(
+                state.w, state.p, state.rho,
+                state.terrain, state.eta_m,
+                nx, ny, nz, 0.5 * dt_ac, grid.ztop
+            );
+            refresh_fast_field_boundaries(state.w, grid, use_open_bc, nz + 1);
+            bc_w_kernel<<<grid_ij, block_ij>>>(
+                state.w, state.u, state.v, state.terrain, state.eta_m, grid.mapfac_m,
+                nx, ny, nz, grid.dx, grid.dy, grid.ztop
+            );
 
-        pressure_update_kernel<<<grid3d, block>>>(
-            state.p,
-            state.u, state.v, state.w,
-            state.rho,
-            state.terrain, state.eta_m, state.eta, grid.mapfac_m,
-            nx, ny, nz, grid.dx, grid.dy, dt_ac,
-            cs_eff2, grid.ztop
-        );
-        pressure_divergence_filter_kernel<<<grid1d, block1d>>>(
-            state.p, state.phi, ACOUSTIC_SMDIV, n_total
-        );
-        refresh_fast_field_boundaries(state.p, grid, use_open_bc, nz);
+            pressure_update_kernel<<<grid3d, block>>>(
+                state.p,
+                state.u, state.v, state.w,
+                state.rho,
+                state.terrain, state.eta_m, state.eta, grid.mapfac_m,
+                nx, ny, nz, grid.dx, grid.dy, dt_ac,
+                cs_eff2, grid.ztop
+            );
+            pressure_divergence_filter_kernel<<<grid1d, block1d>>>(
+                state.p, state.phi, ACOUSTIC_SMDIV, n_total
+            );
+            refresh_fast_field_boundaries(state.p, grid, use_open_bc, nz);
 
-        acoustic_vertical_pg_kernel<<<grid3d_w, block>>>(
-            state.w, state.p, state.rho,
-            state.terrain, state.eta_m,
-            nx, ny, nz, 0.5 * dt_ac, grid.ztop
-        );
+            acoustic_vertical_pg_kernel<<<grid3d_w, block>>>(
+                state.w, state.p, state.rho,
+                state.terrain, state.eta_m,
+                nx, ny, nz, 0.5 * dt_ac, grid.ztop
+            );
+        }
         refresh_fast_field_boundaries(state.w, grid, use_open_bc, nz + 1);
         bc_w_kernel<<<grid_ij, block_ij>>>(
             state.w, state.u, state.v, state.terrain, state.eta_m, grid.mapfac_m,
@@ -1999,7 +2113,7 @@ void rk3_step(StateGPU& state, StateGPU& state_old, StateGPU& state_init,
 
     run_vertical_acoustic_substeps(
         state, grid, dt_rk, acoustic_substeps, cs_eff2,
-        use_open_bc
+        use_open_bc, stability_cfg
     );
     sanitize_prognostic_state(state, grid);
 

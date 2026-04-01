@@ -19,6 +19,8 @@ struct StabilityControlConfig {
     double w_damping_beta = 1.0;
     double w_transport_blend = 1.0;
     int w_transport_diagnostics = 0;
+    int pw_column_implicit = 0;
+    int pw_column_diagnostics = 0;
 };
 
 struct FlowControlMetrics {
