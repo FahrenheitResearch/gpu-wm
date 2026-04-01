@@ -48,7 +48,7 @@ The latest GPT-5.4 Pro review on `main@d92bef2` concluded:
 
 ### `exp/openbc-no-w-relax`
 
-- commit: `8f445ae`
+- commit: `8e0ec7b`
 - changes of interest:
   - stop relaxing open-boundary interface `w` toward the parent/boundary snapshot
   - startup-balanced interface `w` initialization is active for loaded real-data states
