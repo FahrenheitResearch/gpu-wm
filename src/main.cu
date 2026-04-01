@@ -623,8 +623,8 @@ int main(int argc, char** argv) {
                      use_open_bc != 0, cfg.stability, cfg.relax_width);
         }
 
-        // Sponge layers: damp upper boundary and lateral edges
-        // Applied right after dynamics, before physics
+        // Upper sponge layer: applied right after dynamics, before physics.
+        // Lateral relaxation is handled separately by open boundaries.
         if (gfs_mode || use_open_bc) {
             apply_sponge(state, boundary_target, grid, dt);
         }

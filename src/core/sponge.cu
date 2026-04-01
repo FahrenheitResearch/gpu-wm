@@ -71,7 +71,6 @@ __device__ inline double sponge_theta_reference(
 //   alpha = (1 / (20*dt)) * ((z - z_damp) / (ztop - z_damp))^2
 //
 // Fields are relaxed toward:
-//   w       -> 0
 //   theta   -> theta_base[k]
 //   u, v    -> initial values (state_init)
 //
@@ -85,9 +84,7 @@ __device__ inline double sponge_theta_reference(
 __global__ void rayleigh_sponge_kernel(
     real_t* __restrict__ u,
     real_t* __restrict__ v,
-    real_t* __restrict__ w,
     real_t* __restrict__ theta,
-    real_t* __restrict__ p_pert,
     const real_t* __restrict__ u_init,
     const real_t* __restrict__ v_init,
     const real_t* __restrict__ terrain,
@@ -123,14 +120,8 @@ __global__ void rayleigh_sponge_kernel(
     );
 
     // Newtonian relaxation: field = field - alpha*dt*(field - target)
-    // w -> 0
-    w[ijk]      = (real_t)((double)w[ijk] * (1.0 - adt));
-
     // theta -> theta_base[k]
     theta[ijk]  = (real_t)((double)theta[ijk] - adt * ((double)theta[ijk] - theta_ref));
-
-    // p' -> 0
-    p_pert[ijk] = (real_t)((double)p_pert[ijk] * (1.0 - adt));
 
     // u -> initial u
     u[ijk]      = (real_t)((double)u[ijk] - adt * ((double)u[ijk] - (double)u_init[ijk]));
@@ -139,26 +130,41 @@ __global__ void rayleigh_sponge_kernel(
     v[ijk]      = (real_t)((double)v[ijk] - adt * ((double)v[ijk] - (double)v_init[ijk]));
 }
 
+__global__ void rayleigh_sponge_w_kernel(
+    real_t* __restrict__ w,
+    const real_t* __restrict__ terrain,
+    const double* __restrict__ eta_w,
+    int nx, int ny, int nz,
+    double ztop, double dt
+) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    int j = blockIdx.y * blockDim.y + threadIdx.y;
+    int k = blockIdx.z * blockDim.z + threadIdx.z;
+
+    if (i >= nx || j >= ny || k <= 0 || k >= nz) return;
+
+    double terrain_val = sponge_column_terrain(terrain, i, j, nx, ztop);
+    double z = terrain_following_height(terrain_val, eta_w[k], ztop);
+    double z_damp = 0.7 * ztop;
+    if (z <= z_damp) return;
+
+    int nx_h = nx + 4;
+    int ny_h = ny + 4;
+    int ijk_w = idx3w(i, j, k, nx_h, ny_h);
+
+    double frac = (z - z_damp) / (ztop - z_damp);
+    double alpha = (1.0 / (20.0 * dt)) * frac * frac;
+    double adt = alpha * dt;
+    w[ijk_w] = (real_t)((double)w[ijk_w] * (1.0 - adt));
+}
+
 // ----------------------------------------------------------
 // Lateral sponge kernel
 //
-// Active in the outermost SPONGE_WIDTH (15) grid cells on
-// each side of the horizontal domain.
-//
-// Uses a cosine taper so the transition is smooth:
-//   weight = 0.5 * (1 + cos(pi * dist / width))
-// where dist is the distance from the boundary in grid cells
-// (0 at edge, width at inner boundary of the sponge).
-//
-// weight = 1 at the boundary, 0 at the inner edge.
-//
-// Relaxation:
-//   field = field - weight * alpha_lat * dt * (field - field_init)
-//
-// alpha_lat is set to 1/(10*dt) so the outermost cell has
-// strong damping (e-folding time ~ 10 steps).
+// Retained for mass fields in open-boundary runs, but not for
+// interface w or p'. Those are handled by the dedicated open
+// boundary relaxation and the continuity/acoustic system.
 // ----------------------------------------------------------
-
 static constexpr int SPONGE_WIDTH = 15;
 
 __global__ void lateral_sponge_kernel(
@@ -173,41 +179,29 @@ __global__ void lateral_sponge_kernel(
 
     if (i >= nx || j >= ny || k >= nz) return;
 
-    // Distance from each boundary in grid cells
-    int dist_w = i;               // west
-    int dist_e = nx - 1 - i;      // east
-    int dist_s = j;               // south
-    int dist_n = ny - 1 - j;      // north
+    int dist_w = i;
+    int dist_e = nx - 1 - i;
+    int dist_s = j;
+    int dist_n = ny - 1 - j;
     int dist = min(min(dist_w, dist_e), min(dist_s, dist_n));
-
     if (dist >= SPONGE_WIDTH) return;
 
     int nx_h = nx + 4;
     int ny_h = ny + 4;
     int ijk = idx3(i, j, k, nx_h, ny_h);
-
-    // Cosine taper: 1 at boundary, 0 at inner edge
     double weight = 0.5 * (1.0 + cos(PI * (double)dist / (double)SPONGE_WIDTH));
-
-    // Damping rate: 1/(10*dt) at boundary, scaled by weight
     double alpha_lat = 1.0 / (10.0 * dt);
     double adt = weight * alpha_lat * dt;
-
-    // Newtonian relaxation toward initial state
     field[ijk] = (real_t)((double)field[ijk] - adt * ((double)field[ijk] - (double)field_init[ijk]));
 }
 
 // ----------------------------------------------------------
 // Host driver: apply sponge layers
 //
-// Only the upper Rayleigh sponge is applied here.  Lateral
-// damping is handled exclusively by the boundary relaxation in
-// boundaries.cu (apply_open_boundaries), which is called at
-// every RK sub-stage and again after physics.  Running a second
-// lateral sponge here would double-damp the outermost cells
-// (the relaxation zone width=10 overlaps the former sponge
-// width=15) and would also erroneously relax p' toward its
-// initial value.
+// The upper Rayleigh sponge is always applied here.  A lighter
+// lateral sponge is retained for mass fields only; interface w
+// and p' are left to the dedicated boundary relaxation plus the
+// pressure/continuity system.
 // ----------------------------------------------------------
 void apply_sponge(StateGPU& state, StateGPU& state_init,
                   const GridConfig& grid, double dt) {
@@ -217,28 +211,30 @@ void apply_sponge(StateGPU& state, StateGPU& state_init,
 
     dim3 block(8, 8, 4);
     dim3 grid3d((nx + 7) / 8, (ny + 7) / 8, (nz + 3) / 4);
+    dim3 grid3d_w((nx + 7) / 8, (ny + 7) / 8, ((nz + 1) + 3) / 4);
 
     // --- Upper Rayleigh sponge ---
     rayleigh_sponge_kernel<<<grid3d, block>>>(
-        state.u, state.v, state.w, state.theta, state.p,
+        state.u, state.v, state.theta,
         state_init.u, state_init.v,
         state.terrain, state.eta_m, state.theta_base, state.z_levels,
         nx, ny, nz, grid.ztop, dt
     );
+    rayleigh_sponge_w_kernel<<<grid3d_w, block>>>(
+        state.w, state.terrain, state.eta,
+        nx, ny, nz, grid.ztop, dt
+    );
 
-    // --- Lateral sponge (all prognostic fields) ---
     real_t* fields[] = {
-        state.u, state.v, state.w,
-        state.theta,
-        state.qv, state.qc, state.qr, state.p
+        state.u, state.v, state.theta,
+        state.qv, state.qc, state.qr
     };
     real_t* fields_init[] = {
-        state_init.u, state_init.v, state_init.w,
-        state_init.theta,
-        state_init.qv, state_init.qc, state_init.qr, state_init.p
+        state_init.u, state_init.v, state_init.theta,
+        state_init.qv, state_init.qc, state_init.qr
     };
 
-    for (int f = 0; f < 8; f++) {
+    for (int f = 0; f < 6; ++f) {
         lateral_sponge_kernel<<<grid3d, block>>>(
             fields[f], fields_init[f],
             nx, ny, nz, dt
