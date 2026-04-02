@@ -47,7 +47,11 @@ void run_microphysics_thompson(StateGPU& state, const GridConfig& grid, double d
 void run_radiation(StateGPU& state, const GridConfig& grid,
                    double solar_zenith_cos, double solar_constant);
 void run_pbl(StateGPU& state, const GridConfig& grid,
-             double z0, double theta_sfc, double qv_sfc, double cs, double dt);
+             double z0, double qv_sfc, double cs, double dt);
+void initialize_tskin_from_surface_layer(StateGPU& state, const GridConfig& grid,
+                                         double theta_sfc);
+void update_tskin_slab(StateGPU& state, const GridConfig& grid,
+                       double z0, double theta_sfc, double qv_sfc, double dt);
 void print_diagnostics(const StateGPU& state, const GridConfig& grid,
                        double time, int step,
                        const StabilityControlConfig& stability_cfg);
@@ -75,9 +79,11 @@ void copy_state(StateGPU& dst, const StateGPU& src, const GridConfig& grid) {
     int ny_h = grid.ny + 4;
     int n_total = nx_h * ny_h * grid.nz;
     int n_total_w = nx_h * ny_h * (grid.nz + 1);
+    int n2d = grid.nx * grid.ny;
     int block = 256;
     int grid1d = (n_total + 255) / 256;
     int grid1d_w = (n_total_w + 255) / 256;
+    int grid2d = (n2d + 255) / 256;
 
     copy_field_kernel<<<grid1d, block>>>(dst.u, src.u, n_total);
     copy_field_kernel<<<grid1d, block>>>(dst.v, src.v, n_total);
@@ -87,6 +93,7 @@ void copy_state(StateGPU& dst, const StateGPU& src, const GridConfig& grid) {
     copy_field_kernel<<<grid1d, block>>>(dst.qc, src.qc, n_total);
     copy_field_kernel<<<grid1d, block>>>(dst.qr, src.qr, n_total);
     copy_field_kernel<<<grid1d, block>>>(dst.p, src.p, n_total);
+    copy_field_kernel<<<grid2d, block>>>(dst.tskin, src.tskin, n2d);
 }
 
 __global__ void blend_field_kernel(
@@ -146,9 +153,11 @@ void blend_boundary_state(
     int ny_h = grid.ny + 4;
     int n_total = nx_h * ny_h * grid.nz;
     int n_total_w = nx_h * ny_h * (grid.nz + 1);
+    int n2d = grid.nx * grid.ny;
     int block = 256;
     int grid1d = (n_total + block - 1) / block;
     int grid1d_w = (n_total_w + block - 1) / block;
+    int grid2d = (n2d + block - 1) / block;
 
     blend_field_kernel<<<grid1d, block>>>(dst.u, src_a.u, src_b.u, alpha, n_total);
     blend_field_kernel<<<grid1d, block>>>(dst.v, src_a.v, src_b.v, alpha, n_total);
@@ -158,6 +167,7 @@ void blend_boundary_state(
     blend_field_kernel<<<grid1d, block>>>(dst.qc, src_a.qc, src_b.qc, alpha, n_total);
     blend_field_kernel<<<grid1d, block>>>(dst.qr, src_a.qr, src_b.qr, alpha, n_total);
     blend_field_kernel<<<grid1d, block>>>(dst.p, src_a.p, src_b.p, alpha, n_total);
+    blend_field_kernel<<<grid2d, block>>>(dst.tskin, src_a.tskin, src_b.tskin, alpha, n2d);
 
     int nz = grid.nz;
     int grid1d_z = (nz + block - 1) / block;
@@ -519,6 +529,7 @@ int main(int argc, char** argv) {
     if (gfs_mode) {
         initialize_w_from_continuity(state, grid, "primary-init");
     }
+    initialize_tskin_from_surface_layer(state, grid, theta_sfc);
     print_case_summary(grid);
 
     allocate_state(state_old, grid);
@@ -670,7 +681,8 @@ int main(int argc, char** argv) {
 
         // PBL: implicit vertical diffusion + surface layer
         if (cfg.test_case == 3 || gfs_mode) {
-            run_pbl(state, grid, z0, theta_sfc, qv_sfc, cs_smag, dt);
+            update_tskin_slab(state, grid, z0, theta_sfc, qv_sfc, dt);
+            run_pbl(state, grid, z0, qv_sfc, cs_smag, dt);
         }
 
         // Boundary conditions after physics

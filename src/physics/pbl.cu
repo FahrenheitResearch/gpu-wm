@@ -45,6 +45,7 @@ __global__ void pbl_column_kernel(
     real_t* __restrict__ theta,
     real_t* __restrict__ qv,
     const real_t* __restrict__ rho,
+    const real_t* __restrict__ tskin,
     const real_t* __restrict__ terrain,  // 2D terrain height (m) [nx*ny]
     const double* __restrict__ eta_m,    // eta at mass levels [nz]
     const double* __restrict__ eta_w,    // eta at w-levels [nz+1]
@@ -52,7 +53,6 @@ __global__ void pbl_column_kernel(
     double dx, double dy,
     double ztop,       // model top height (m)
     double z0,         // roughness length (m)
-    double theta_sfc,  // surface potential temperature (K)
     double qv_sfc,     // surface moisture mixing ratio (kg/kg)
     double cs,         // Smagorinsky coefficient
     double dt          // timestep for implicit solver
@@ -131,7 +131,9 @@ __global__ void pbl_column_kernel(
     double qv1 = qv_col[1];
     double rho1 = rho_col[1];
 
-    double theta_sfc_local = theta_sfc;
+    double theta_skin = (double)tskin[idx2(i, j, nx)];
+    if (!(theta_skin > 0.0)) theta_skin = th1;
+    double theta_sfc_local = theta_skin;
     double qv_sfc_local = fmax(qv_sfc, 0.0);
     if (nz > 2) {
         double z2 = z_agl[2];         // second mass level AGL
@@ -144,7 +146,7 @@ __global__ void pbl_column_kernel(
 
         // Blend diagnosed local surface conditions with the configured prior
         // so the exchange fields can vary horizontally without becoming noisy.
-        theta_sfc_local = 0.75 * theta_extrap + 0.25 * theta_sfc;
+        theta_sfc_local = 0.75 * theta_extrap + 0.25 * theta_skin;
         qv_sfc_local = 0.75 * qv_extrap + 0.25 * qv_sfc_local;
     }
 
@@ -487,7 +489,7 @@ __global__ void pbl_column_kernel(
 // Host driver
 // ----------------------------------------------------------
 void run_pbl(StateGPU& state, const GridConfig& grid,
-             double z0, double theta_sfc, double qv_sfc, double cs, double dt) {
+             double z0, double qv_sfc, double cs, double dt) {
     int nx = grid.nx, ny = grid.ny, nz = grid.nz;
 
     dim3 block2d(16, 16);
@@ -495,13 +497,13 @@ void run_pbl(StateGPU& state, const GridConfig& grid,
 
     pbl_column_kernel<<<grid2d, block2d>>>(
         state.u, state.v, state.theta, state.qv,
-        state.rho,
+        state.rho, state.tskin,
         state.terrain,       // 2D terrain height field
         state.eta_m,         // eta at mass levels [nz]
         state.eta,           // eta at w-levels [nz+1]
         nx, ny, nz, grid.dx, grid.dy,
         grid.ztop,           // model top height
-        z0, theta_sfc, qv_sfc, cs,
+        z0, qv_sfc, cs,
         dt
     );
 }

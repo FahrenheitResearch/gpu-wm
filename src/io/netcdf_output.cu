@@ -376,7 +376,7 @@ void write_netcdf(const StateGPU& state, const GridConfig& grid,
     int dims_time_w[] = {dim_time_wrf, dim_bt_stag, dim_sn, dim_we};
 
     int var_times, var_xlat, var_xlong, var_hgt, var_mapfac_m, var_cosalpha, var_sinalpha;
-    int var_psfc, var_t2, var_q2, var_u10, var_v10;
+    int var_psfc, var_t2, var_q2, var_u10, var_v10, var_tsk;
     int var_p, var_pb, var_ph, var_phb, var_t_wrf, var_qvapor, var_qcloud, var_qrain;
     int var_u_wrf, var_v_wrf, var_w_wrf;
 
@@ -392,6 +392,7 @@ void write_netcdf(const StateGPU& state, const GridConfig& grid,
     NC_CHECK(nc_def_var(ncid, "Q2", NC_FLOAT, 3, dims_time_2d, &var_q2));
     NC_CHECK(nc_def_var(ncid, "U10", NC_FLOAT, 3, dims_time_2d, &var_u10));
     NC_CHECK(nc_def_var(ncid, "V10", NC_FLOAT, 3, dims_time_2d, &var_v10));
+    NC_CHECK(nc_def_var(ncid, "TSK", NC_FLOAT, 3, dims_time_2d, &var_tsk));
     NC_CHECK(nc_def_var(ncid, "P", NC_FLOAT, 4, dims_time_3d, &var_p));
     NC_CHECK(nc_def_var(ncid, "PB", NC_FLOAT, 4, dims_time_3d, &var_pb));
     NC_CHECK(nc_def_var(ncid, "PH", NC_FLOAT, 4, dims_time_w, &var_ph));
@@ -441,8 +442,8 @@ void write_netcdf(const StateGPU& state, const GridConfig& grid,
                     strlen("TERRAIN_SLOPE is a diagnostic derived from centered terrain height differences"),
                     "TERRAIN_SLOPE is a diagnostic derived from centered terrain height differences");
     nc_put_att_text(ncid, NC_GLOBAL, "wrf_compatibility_note",
-                    strlen("WRF-compatible fields use synthesized staggering and lowest-model-level surface approximations"),
-                    "WRF-compatible fields use synthesized staggering and lowest-model-level surface approximations");
+                    strlen("WRF-compatible fields use synthesized staggering, a prognostic slab TSK field, and lowest-model-level surface approximations for T2/Q2/U10/V10"),
+                    "WRF-compatible fields use synthesized staggering, a prognostic slab TSK field, and lowest-model-level surface approximations for T2/Q2/U10/V10");
     nc_put_att_text(ncid, NC_GLOBAL, "times_note",
                     strlen("Times stores UTC valid time from init metadata when available; otherwise it falls back to epoch plus elapsed seconds"),
                     "Times stores UTC valid time from init metadata when available; otherwise it falls back to epoch plus elapsed seconds");
@@ -472,6 +473,9 @@ void write_netcdf(const StateGPU& state, const GridConfig& grid,
     nc_put_att_text(ncid, var_rho, "long_name", 7, "density");
     nc_put_att_text(ncid, var_rh, "units", 1, "%");
     nc_put_att_text(ncid, var_rh, "long_name", 17, "relative humidity");
+    nc_put_att_text(ncid, var_tsk, "units", 1, "K");
+    nc_put_att_text(ncid, var_tsk, "long_name",
+                    strlen("slab skin temperature"), "slab skin temperature");
 
     nc_put_att_text(ncid, var_z, "units", 1, "m");
     nc_put_att_text(ncid, var_z, "long_name", strlen("geometric height of mass levels"),
@@ -699,6 +703,7 @@ void write_netcdf(const StateGPU& state, const GridConfig& grid,
     std::vector<float> psfc(n2d, 0.0f);
     std::vector<float> t2(n2d, 0.0f);
     std::vector<float> q2(n2d, 0.0f);
+    std::vector<float> tsk(n2d, 0.0f);
     for (int k = 0; k < nz; ++k) {
         double eta_k = grid.eta_m ? grid.eta_m[k] : ((k + 0.5) / nz);
         for (int j = 0; j < ny; ++j) {
@@ -766,6 +771,8 @@ void write_netcdf(const StateGPU& state, const GridConfig& grid,
     NC_CHECK(nc_put_var_float(ncid, var_psfc, psfc.data()));
     NC_CHECK(nc_put_var_float(ncid, var_t2, t2.data()));
     NC_CHECK(nc_put_var_float(ncid, var_q2, q2.data()));
+    CUDA_CHECK(cudaMemcpy(tsk.data(), state.tskin, n2d * sizeof(real_t), cudaMemcpyDeviceToHost));
+    NC_CHECK(nc_put_var_float(ncid, var_tsk, tsk.data()));
 
     copy_mass_field(state.u, scratch_mass);
     NC_CHECK(nc_put_var_float(ncid, var_u_mass, scratch_mass.data()));

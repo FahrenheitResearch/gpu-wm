@@ -30,6 +30,7 @@ add_executable(gpu-wm
     src/physics/microphysics_thompson.cu
     src/physics/radiation.cu
     src/physics/pbl.cu
+    src/physics/surface_slab.cu
     src/io/output.cu
     src/io/netcdf_output.cu
     src/io/grib_reader.cu
