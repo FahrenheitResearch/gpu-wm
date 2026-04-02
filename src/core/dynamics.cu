@@ -515,6 +515,89 @@ __device__ inline double generalized_horizontal_divergence(
     return (flux_x + flux_y) / h_c;
 }
 
+__device__ inline double terrain_following_pressure_gradient_x(
+    const real_t* __restrict__ p_pert,
+    const real_t* __restrict__ terrain,
+    const double* __restrict__ eta_m,
+    int i, int j, int k,
+    int nx, int ny, int nz, int nx_h, int ny_h,
+    double dx_eff, double dy_eff, double ztop
+) {
+    double dpdz = vertical_derivative_mass_field(
+        p_pert, terrain, eta_m, i, j, k, nx, nz, nx_h, ny_h, ztop
+    );
+    double zx = local_metric_slope_x(terrain, eta_m, i, j, k, nx, ny, dx_eff, ztop);
+    double dpdx_eta = ((double)p_pert[idx3(i + 1, j, k, nx_h, ny_h)] -
+                       (double)p_pert[idx3(i - 1, j, k, nx_h, ny_h)]) / (2.0 * dx_eff);
+    return dpdx_eta - zx * dpdz;
+}
+
+__device__ inline double terrain_following_pressure_gradient_y(
+    const real_t* __restrict__ p_pert,
+    const real_t* __restrict__ terrain,
+    const double* __restrict__ eta_m,
+    int i, int j, int k,
+    int nx, int ny, int nz, int nx_h, int ny_h,
+    double dx_eff, double dy_eff, double ztop
+) {
+    double dpdz = vertical_derivative_mass_field(
+        p_pert, terrain, eta_m, i, j, k, nx, nz, nx_h, ny_h, ztop
+    );
+    double zy = local_metric_slope_y(terrain, eta_m, i, j, k, nx, ny, dy_eff, ztop);
+    double dpdy_eta = ((double)p_pert[idx3(i, j + 1, k, nx_h, ny_h)] -
+                       (double)p_pert[idx3(i, j - 1, k, nx_h, ny_h)]) / (2.0 * dy_eff);
+    return dpdy_eta - zy * dpdz;
+}
+
+__device__ inline double generalized_horizontal_divergence_halfstep(
+    const real_t* __restrict__ u,
+    const real_t* __restrict__ v,
+    const real_t* __restrict__ p_pert_snapshot,
+    const real_t* __restrict__ rho_ref,
+    const real_t* __restrict__ terrain,
+    const double* __restrict__ eta_m,
+    int i, int j, int k,
+    int nx, int ny, int nz, int nx_h, int ny_h,
+    double dx_eff, double dy_eff, double dt_half, double ztop
+) {
+    double h_c = local_column_depth(terrain, i, j, nx, ny, ztop);
+    double h_ip = local_column_depth(terrain, i + 1, j, nx, ny, ztop);
+    double h_im = local_column_depth(terrain, i - 1, j, nx, ny, ztop);
+    double h_jp = local_column_depth(terrain, i, j + 1, nx, ny, ztop);
+    double h_jm = local_column_depth(terrain, i, j - 1, nx, ny, ztop);
+
+    double rho_ip = reference_density_from_field(rho_ref, i + 1, j, k, nx_h, ny_h);
+    double rho_im = reference_density_from_field(rho_ref, i - 1, j, k, nx_h, ny_h);
+    double rho_jp = reference_density_from_field(rho_ref, i, j + 1, k, nx_h, ny_h);
+    double rho_jm = reference_density_from_field(rho_ref, i, j - 1, k, nx_h, ny_h);
+
+    double dpdx_ip = terrain_following_pressure_gradient_x(
+        p_pert_snapshot, terrain, eta_m, i + 1, j, k,
+        nx, ny, nz, nx_h, ny_h, dx_eff, dy_eff, ztop
+    );
+    double dpdx_im = terrain_following_pressure_gradient_x(
+        p_pert_snapshot, terrain, eta_m, i - 1, j, k,
+        nx, ny, nz, nx_h, ny_h, dx_eff, dy_eff, ztop
+    );
+    double dpdy_jp = terrain_following_pressure_gradient_y(
+        p_pert_snapshot, terrain, eta_m, i, j + 1, k,
+        nx, ny, nz, nx_h, ny_h, dx_eff, dy_eff, ztop
+    );
+    double dpdy_jm = terrain_following_pressure_gradient_y(
+        p_pert_snapshot, terrain, eta_m, i, j - 1, k,
+        nx, ny, nz, nx_h, ny_h, dx_eff, dy_eff, ztop
+    );
+
+    double u_half_ip = (double)u[idx3(i + 1, j, k, nx_h, ny_h)] - dt_half * dpdx_ip / fmax(rho_ip, 1.0e-6);
+    double u_half_im = (double)u[idx3(i - 1, j, k, nx_h, ny_h)] - dt_half * dpdx_im / fmax(rho_im, 1.0e-6);
+    double v_half_jp = (double)v[idx3(i, j + 1, k, nx_h, ny_h)] - dt_half * dpdy_jp / fmax(rho_jp, 1.0e-6);
+    double v_half_jm = (double)v[idx3(i, j - 1, k, nx_h, ny_h)] - dt_half * dpdy_jm / fmax(rho_jm, 1.0e-6);
+
+    double flux_x = (h_ip * u_half_ip - h_im * u_half_im) / (2.0 * dx_eff);
+    double flux_y = (h_jp * v_half_jp - h_jm * v_half_jm) / (2.0 * dy_eff);
+    return (flux_x + flux_y) / h_c;
+}
+
 __global__ void flow_control_metrics_kernel(
     const real_t* __restrict__ u,
     const real_t* __restrict__ v,
@@ -1262,6 +1345,7 @@ __global__ void pressure_update_kernel(
 __global__ void semiimplicit_pw_column_kernel(
     real_t* __restrict__ p_pert,
     real_t* __restrict__ w,
+    const real_t* __restrict__ p_snapshot,
     const real_t* __restrict__ u,
     const real_t* __restrict__ v,
     const real_t* __restrict__ rho_ref,
@@ -1295,8 +1379,9 @@ __global__ void semiimplicit_pw_column_kernel(
         pold[k] = (double)p_pert[ijk];
         double dz_cell = local_mass_cell_thickness(terrain, eta_w, i, j, k, nx, ztop);
         double rho_cell = reference_density_from_field(rho_ref, i, j, k, nx_h, ny_h);
-        double hdiv = generalized_horizontal_divergence(
-            u, v, terrain, i, j, k, nx, ny, nx_h, ny_h, dx_eff, dy_eff, ztop
+        double hdiv = generalized_horizontal_divergence_halfstep(
+            u, v, p_snapshot, rho_ref, terrain, eta_m,
+            i, j, k, nx, ny, nz, nx_h, ny_h, dx_eff, dy_eff, 0.5 * dt_ac, ztop
         );
         double old_dwdz = ((double)w[idx3w(i, j, k + 1, nx_h, ny_h)] -
                            (double)w[idx3w(i, j, k, nx_h, ny_h)]) / dz_cell;
@@ -1773,8 +1858,9 @@ void run_vertical_acoustic_substeps(
 
     for (int substep = 0; substep < acoustic_substeps; ++substep) {
         if (use_pw_column_implicit) {
+            acoustic_copy_field_kernel<<<grid1d, block1d>>>(state.phi, state.p, n_total);
             semiimplicit_pw_column_kernel<<<grid2d_cols, block_col>>>(
-                state.p, state.w,
+                state.p, state.w, state.phi,
                 state.u, state.v, state.rho,
                 state.terrain, state.eta_m, state.eta, grid.mapfac_m,
                 nx, ny, nz, grid.dx, grid.dy, dt_ac,

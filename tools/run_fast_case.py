@@ -449,7 +449,7 @@ def main() -> int:
     surface_grib_path = (repo_root / args.surface_grib) if args.surface_grib else None
     build_path = repo_root / args.build
 
-    need_grib_inputs = args.regen_init or not init_path.exists()
+    need_grib_inputs = args.regen_init or (not args.init and not init_path.exists())
     if need_grib_inputs and not grib_path.exists():
         raise FileNotFoundError(f"Primary GRIB file not found: {grib_path}")
     if need_grib_inputs and surface_grib_path is not None and not surface_grib_path.exists():
@@ -550,7 +550,10 @@ def main() -> int:
     print("Fast-loop run complete")
     print(f"  Init:      {init_path}")
     print(f"  Run dir:   {run_dir}")
-    print(f"  Source:    {grib_path}")
+    if need_grib_inputs:
+        print(f"  Source:    {grib_path}")
+    else:
+        print("  Source:    existing --init")
     if surface_grib_path is not None:
         print(f"  Surface:   {surface_grib_path}")
     print(f"  Grid:      {args.nx} x {args.ny} x {args.nz} @ {args.dx:.0f} m")

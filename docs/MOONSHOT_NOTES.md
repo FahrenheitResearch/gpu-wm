@@ -218,6 +218,44 @@ Newest narrowed refinement:
   - `stretch_900`
   - East-PA static `+1 h`
 
+Newest narrowed refinement:
+
+- latest external review says the next remaining fast-pair defect is most likely
+  explicit horizontal-divergence time level, not another filter or `dwdz`
+  asymmetry
+- active branch:
+  - `exp/semiimplicit-hdiv-half`
+- scope:
+  - keep the coupled-filter `24d7eaf` semi-implicit core
+  - snapshot old pressure each acoustic substep
+  - replace raw `generalized_horizontal_divergence(u,v,...)` in the column RHS
+    with a half-step `hdiv_half` built from a pressure-gradient predictor off
+    that snapshot
+- current result:
+  - East-PA static `+1 h`: `U/V/THETA = 2.65 / 3.59 / 7.18`, `mean|w| = 0.0857`
+  - East-PA boundary `+1 h`: `2.66 / 3.60 / 7.20`, `mean|w| = 0.0859`
+  - `stretch_900`: `2.51 / 3.79 / 13.88`, `mean|w| = 3.93`
+  - `stretch_3600`: `4.33 / 4.83 / 15.13`, `mean|w| = 2.42`
+  - `stretch_21600`: `3.50 / 3.39 / 7.47`, `mean|w| = 0.72`
+- interpretation:
+  - this is the first post-`24d7eaf` refinement that appears to keep the strong
+    regional result and fix the stretched canonical ladder at the same time
+
+If `hdiv_half` fails at longer horizons:
+
+- next GPT-5.4 Pro recommendation is no longer another RHS-only tweak
+- next seam would be fast horizontal pressure-gradient substepping for `u/v`
+  inside `run_vertical_acoustic_substeps()`
+- smallest proposed change:
+  - extract the `u/v` part of `pressure_gradient_kernel()` into an
+    `acoustic_horizontal_pg_kernel()`
+  - call it as a half-step before and after the semi-implicit column solve
+  - suppress the slow `u/v` pressure-gradient contribution in the implicit mode
+- current status:
+  - not active yet
+  - only promote this if the new `hdiv_half` branch fails at `+3 h` East-PA or
+    the Panhandles HRRR realism rerun
+
 ### 4. Precomputed Face-Geometry Cache with Discrete Metric Identity Checks
 
 Category: solver correctness

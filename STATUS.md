@@ -4,9 +4,41 @@ Last updated: 2026-04-01
 
 ## Current Position
 
-`gpu-wm` is a real CUDA regional-model prototype. It is still below WRF-quality on forecast realism and robustness, but it has now crossed an important threshold on the active branch: the eastern Pennsylvania `768 x 640 x 50 @ 4 km` real-data case can survive to `+1 h` instead of catastrophically blowing up.
+`gpu-wm` is a real CUDA regional-model prototype. It is still below WRF-quality on forecast realism and robustness, but the active semi-implicit branch family has now crossed another threshold: the same solver seam that fixes the East-PA real-data `+1 h` case is also starting to line up with the stretched canonical gates instead of trading one benchmark off against the other.
 
-The newest important change is on `exp/semiimplicit-pw-column@7c748cb`:
+The newest important change is the active `hdiv_half` refinement on top of `exp/semiimplicit-no-slow-metric@24d7eaf`:
+
+- working branch: `exp/semiimplicit-hdiv-half` (local branch built from `24d7eaf`)
+- change:
+  - keep the coupled semi-implicit `p-w` correction from `24d7eaf`
+  - snapshot `p` at the start of each acoustic substep
+  - replace raw `generalized_horizontal_divergence(u,v,...)` in the column RHS
+    with a half-step `hdiv_half` built from a pressure-gradient predictor off the
+    old-pressure snapshot
+- East-PA static `+1 h` on H100 NVL:
+  - `U/V/THETA rmse = 2.65 / 3.59 / 7.18`
+  - `mean|w| = 0.0857`
+  - `max|w| = 4.13`
+  - `outer_20 qtot_d = +0.76%`
+  - `interior qtot_d = +0.25%`
+- East-PA boundary-forced `+1 h` on H100 80GB:
+  - `U/V/THETA rmse = 2.66 / 3.60 / 7.20`
+  - `mean|w| = 0.0859`
+  - `max|w| = 4.28`
+  - `outer_20 qtot_d = +0.92%`
+  - `interior qtot_d = +0.26%`
+- stretched canonical gates now also look materially better on the same branch:
+  - `stretch_900`: `U/V/THETA = 2.51 / 3.79 / 13.88`, `mean|w| = 3.93`, `max|w| = 19.05`
+  - `stretch_3600`: `U/V/THETA = 4.33 / 4.83 / 15.13`, `mean|w| = 2.42`, `max|w| = 15.08`
+  - `stretch_21600`: `U/V/THETA = 3.50 / 3.39 / 7.47`, `mean|w| = 0.72`, `max|w| = 8.02`
+- interpretation:
+  - this is the first semi-implicit refinement after `24d7eaf` that appears to
+    preserve the strong East-PA regional result while also fixing the stretched
+    canonical ladder
+  - East-PA `+3 h` and the Panhandles HRRR rerun are now the decisive
+    follow-on validations
+
+The earlier important change was `exp/semiimplicit-pw-column@7c748cb`:
 
 - the first columnwise semi-implicit fast `p-w` prototype is the strongest solver-side regional result yet
 - on the eastern Pennsylvania static `+1 h` case at `dt=6`, `alpha=6.0`, `blend=1.0`, it improved materially versus the surviving explicit control:
@@ -108,6 +140,31 @@ The latest GPT-5.4 Pro review on `main@d92bef2` concluded:
   - strongest East-PA static and boundary-forced `+1 h` results so far
   - not ready for promotion yet because the first prototype still regresses `stretch_900`
   - now also the active branch for the 4 km Panhandles HRRR realism benchmark
+
+### `exp/semiimplicit-no-slow-metric`
+
+- commit: `24d7eaf`
+- change:
+  - keep the semi-implicit column solve
+  - move the acoustic pressure-divergence damping inside the implicit path as a
+    coupled `p-w` correction
+- current result:
+  - best pre-`hdiv_half` East-PA static `+1 h` result
+  - still left a stretched canonical failure mode, which motivated the next RHS
+    time-level refinement
+
+### `exp/semiimplicit-hdiv-half`
+
+- branch base: `24d7eaf`
+- change:
+  - replace raw explicit `hdiv` in the implicit column RHS with a half-step
+    pressure-predicted `hdiv_half`
+- current result:
+  - strongest cross-benchmark solver branch so far
+  - preserves the East-PA static and boundary `+1 h` regional win
+  - now also passes `stretch_900`, `stretch_3600`, and `stretch_21600`
+  - current role: active best solver branch pending `+3 h` East-PA and
+    Panhandles reruns
 
 ## Best Verified Canonical Gate Result So Far
 
