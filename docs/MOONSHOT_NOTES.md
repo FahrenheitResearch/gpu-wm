@@ -237,9 +237,14 @@ Newest narrowed refinement:
   - `stretch_900`: `2.51 / 3.79 / 13.88`, `mean|w| = 3.93`
   - `stretch_3600`: `4.33 / 4.83 / 15.13`, `mean|w| = 2.42`
   - `stretch_21600`: `3.50 / 3.39 / 7.47`, `mean|w| = 0.72`
+  - East-PA static `+3 h`: `6.29 / 8.61 / 10.68`, `mean|w| = 0.1070`
+  - East-PA boundary `+3 h`: `6.24 / 8.81 / 10.79`, `mean|w| = 0.1072`
+  - Panhandles HRRR `+3 h`: `4.71 / 7.32 / 8.55`, `mean|w| = 0.1291`
 - interpretation:
   - this is the first post-`24d7eaf` refinement that appears to keep the strong
     regional result and fix the stretched canonical ladder at the same time
+  - it now also holds the East-PA regional gain through `+3 h` and keeps the
+    4 km Panhandles realism benchmark in a clean, plausible regime through `+3 h`
 
 If `hdiv_half` fails at longer horizons:
 

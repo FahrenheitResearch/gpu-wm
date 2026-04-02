@@ -1,6 +1,6 @@
 # GPU-WM Status
 
-Last updated: 2026-04-01
+Last updated: 2026-04-02
 
 ## Current Position
 
@@ -31,12 +31,24 @@ The newest important change is the active `hdiv_half` refinement on top of `exp/
   - `stretch_900`: `U/V/THETA = 2.51 / 3.79 / 13.88`, `mean|w| = 3.93`, `max|w| = 19.05`
   - `stretch_3600`: `U/V/THETA = 4.33 / 4.83 / 15.13`, `mean|w| = 2.42`, `max|w| = 15.08`
   - `stretch_21600`: `U/V/THETA = 3.50 / 3.39 / 7.47`, `mean|w| = 0.72`, `max|w| = 8.02`
+- East-PA static `+3 h` on H100 NVL:
+  - `U/V/THETA rmse = 6.29 / 8.61 / 10.68`
+  - `mean|w| = 0.1070`
+  - `max|w| = 5.49`
+  - `outer_20 qtot_d = -0.37%`
+  - `interior qtot_d = -4.67%`
+- East-PA boundary-forced `+3 h` on H100 80GB:
+  - `U/V/THETA rmse = 6.24 / 8.81 / 10.79`
+  - `mean|w| = 0.1072`
+  - `max|w| = 5.01`
+  - `outer_20 qtot_d = +0.18%`
+  - `interior qtot_d = -4.48%`
 - interpretation:
-  - this is the first semi-implicit refinement after `24d7eaf` that appears to
-    preserve the strong East-PA regional result while also fixing the stretched
+  - this is the first semi-implicit refinement after `24d7eaf` that preserves
+    the strong East-PA regional result while also fixing the stretched
     canonical ladder
-  - East-PA `+3 h` and the Panhandles HRRR rerun are now the decisive
-    follow-on validations
+  - the branch now also holds that gain through `+3 h` on both static and
+    boundary-forced East-PA runs
 
 The earlier important change was `exp/semiimplicit-pw-column@7c748cb`:
 
@@ -69,15 +81,28 @@ There is now also a second realism benchmark active on the same branch:
 - Oklahoma / Texas Panhandles HRRR real-data case
 - grid: `512 x 384 x 50 @ 4 km`
 - init/boundary pair: `2026-04-01 19z` HRRR `f00` + `f03`
-- local `+1 h` result from the first mirror run:
-  - `U/V/THETA rmse = 2.64 / 2.95 / 7.81`
-  - `mean|w| = 0.157`
-  - `max|w| = 5.18`
-  - `outer_20 qtot_burden_d = -0.15%`
-  - `interior qtot_burden_d = -1.37%`
+- `exp/semiimplicit-hdiv-half` `+1 h` on H100 80GB:
+  - `U/V/THETA rmse = 2.25 / 2.67 / 5.58`
+  - `mean|w| = 0.116`
+  - `max|w| = 4.86`
+  - `outer_20 qtot_d = +0.07%`
+  - `interior qtot_d = -0.42%`
+- `exp/semiimplicit-hdiv-half` `+2 h` on H100 80GB:
+  - `U/V/THETA rmse = 3.45 / 4.96 / 7.03`
+  - `mean|w| = 0.122`
+  - `max|w| = 5.08`
+  - `outer_20 qtot_d = +0.80%`
+  - `interior qtot_d = +0.47%`
+- `exp/semiimplicit-hdiv-half` `+3 h` on H100 80GB:
+  - `U/V/THETA rmse = 4.71 / 7.32 / 8.55`
+  - `mean|w| = 0.129`
+  - `max|w| = 6.19`
+  - `outer_20 qtot_d = +1.52%`
+  - `interior qtot_d = +1.35%`
 - interpretation:
-  - the semi-implicit branch is not just surviving a terrain-stress case
-  - it is now also producing a plausible short-range 4 km Plains benchmark from latest HRRR data
+  - the `hdiv_half` branch is not just surviving a terrain-stress case
+  - it is also producing a plausible short-range 4 km Plains benchmark from
+    latest HRRR data through `+3 h`
 
 The strongest public baseline on `main` is:
 
