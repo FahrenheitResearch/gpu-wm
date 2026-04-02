@@ -285,10 +285,17 @@ def read_grib_field(filepath, short_name, level, type_of_level, cache=None):
                 msgid = eccodes.codes_grib_new_from_file(f)
                 if msgid is None:
                     raise RuntimeError("Failed to read cached message at offset %d" % offset)
-                vals = eccodes.codes_get_double_array(msgid, 'values')
-                grid_info = _extract_grid_info(msgid)
-                eccodes.codes_release(msgid)
-                return vals.reshape(grid_info['nj'], grid_info['ni']), grid_info
+                name = eccodes.codes_get(msgid, 'shortName')
+                tol = eccodes.codes_get(msgid, 'typeOfLevel')
+                lev = eccodes.codes_get(msgid, 'level')
+                if name != short_name or tol != type_of_level or lev != level:
+                    eccodes.codes_release(msgid)
+                    msgid = None
+                else:
+                    vals = eccodes.codes_get_double_array(msgid, 'values')
+                    grid_info = _extract_grid_info(msgid)
+                    eccodes.codes_release(msgid)
+                    return vals.reshape(grid_info['nj'], grid_info['ni']), grid_info
 
     # Sequential scan (fallback)
     with open(filepath, 'rb') as f:
@@ -320,10 +327,10 @@ def build_grib_index(filepath):
     index = {}
     with open(filepath, 'rb') as f:
         while True:
-            offset = f.tell()
             msgid = eccodes.codes_grib_new_from_file(f)
             if msgid is None:
                 break
+            offset = eccodes.codes_get_message_offset(msgid)
             name = eccodes.codes_get(msgid, 'shortName')
             tol = eccodes.codes_get(msgid, 'typeOfLevel')
             lev = eccodes.codes_get(msgid, 'level')

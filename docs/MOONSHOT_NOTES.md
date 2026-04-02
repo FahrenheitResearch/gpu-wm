@@ -12,14 +12,16 @@ in hours or days.
 
 Current grounding:
 
-- `main@d92bef2` is a real CUDA regional-model prototype, but large real-data
-  terrain-following runs are still below WRF-quality robustness.
-- The repo and external reviews agree that the main blocker is still solver
-  correctness, especially mixed `w` semantics across slow terms, boundaries,
-  and sponge behavior.
-- The current experimental family has already shown that `w` transport,
-  `w` damping, and open-boundary `w` handling can move the model materially.
-- Two direct moisture-transport follow-ups have already failed:
+- `exp/semiimplicit-hdiv-half` is now the best solver baseline.
+- The semi-implicit `p-w` seam plus `hdiv_half` refinement carried:
+  - East-PA static and boundary runs through `+6 h`
+  - stretched canonical gates through `stretch_21600`
+  - the 4 km Panhandles HRRR realism benchmark through `+3 h`
+- That means the drycore is no longer the main blocker on the active branch.
+- The most obvious realism weakness is now near-surface thermodynamics:
+  `T2/RH2` evolve too stiffly relative to HRRR while wind and reflectivity look
+  more alive.
+- Two direct moisture-transport follow-ups already failed:
   - `exp/moisture-conservative-transport@b07e55b`
   - `exp/moisture-vertical-flux@bc76b9d`
   Both flipped the stretched `qtot` drift positive at `stretch_900`, so the
@@ -28,7 +30,90 @@ Current grounding:
 This memo deliberately separates solver-correctness ideas from realism ideas
  and systems ideas.
 
-## Ranked Ideas
+## Active Next Moonshots
+
+### 0. Minimal Slab Surface Energy-Balance Model
+
+Category: realism physics
+
+Why it might matter:
+
+- The solver now looks good enough that the biggest visible weakness is stiff
+  near-surface temperature and humidity evolution.
+- Current `T2/Q2` are effectively lowest-model-level values, and the surface
+  flux path in `pbl.cu` still leans on scalar priors instead of a prognostic
+  surface thermal memory.
+- A cheap slab `tskin` is the smallest way to give the model a real evolving
+  surface state without dragging in a full land-surface system.
+
+Files / functions:
+
+- `include/grid.cuh`
+- `src/physics/pbl.cu`
+- `src/main.cu`
+- new `src/physics/surface_slab.cu`
+- `src/io/netcdf_output.cu`
+
+Quick falsification:
+
+- Re-run the Panhandles HRRR benchmark to `+6 h`.
+- If `T2/RH2` still look just as stationary while wind/reflectivity stay the
+  same, kill the idea quickly or shrink it to diagnostics only.
+
+Expected compute impact:
+
+- Small.
+- One extra 2D state plus cheap per-column surface math.
+
+### 1. Proper Near-Surface Diagnostics
+
+Category: realism diagnostics
+
+Why it might matter:
+
+- Current `T2/Q2/U10/V10` outputs are still basically lowest-model-level
+  fields.
+- That is good enough for rough comparison, but not a fair apples-to-apples
+  verification target against HRRR surface products.
+
+Files / functions:
+
+- `src/io/netcdf_output.cu`
+- `src/physics/pbl.cu`
+
+Quick falsification:
+
+- Add `TSK` and separate 2 m / 10 m diagnostics.
+- If the comparison story barely changes, keep the diagnostics but do not treat
+  them as the main realism lever.
+
+### 2. Fast Acoustic `u/v` Pressure-Gradient Substepping
+
+Category: solver follow-up, only if needed
+
+Why it might matter:
+
+- If the in-flight `+12 h` durability runs expose a new fast-loop defect,
+  the next smallest solver seam is to stop freezing fast horizontal PG effects
+  on `u/v` outside the acoustic loop.
+- GPT Pro already narrowed this as the next seam only if `hdiv_half` fails at
+  longer horizons.
+
+Files / functions:
+
+- `src/core/dynamics.cu::run_vertical_acoustic_substeps`
+- extracted `acoustic_horizontal_pg_kernel()`
+
+Quick falsification:
+
+- East-PA static `+1 h` and `+6 h` against the current `hdiv_half` baseline.
+- If U/V do not recover further without harming stretched cases, drop it.
+
+## Ranked Ideas (Historical Solver Archive)
+
+The items below are retained for traceability. Most of them are no longer the
+active research queue because the semi-implicit `hdiv_half` path has already
+promoted the solver past the old failure regime.
 
 ### 0. Fast Pressure Radiative Boundary for the Acoustic Refresh
 
@@ -613,82 +698,75 @@ Skeptical note:
 
 ## Top 3 Next Experiment Branches
 
-These are the next three branches worth implementing before another broad
-solver review. They are ordered by upside-to-effort, not by conventionality.
+These are the next three branches worth implementing now that the solver is in
+the usable zone.
 
-### Branch 1: `exp/column-balance-startup`
-
-Goal:
-
-- Replace "zero `w` then continuity-only patch" with a one-time startup
-  balance pass for interface `w` and `p'`.
-
-Minimal code delta:
-
-- Extend `initialize_w_from_continuity()` into a startup balance driver.
-- Add one optional column pass that nudges `p'` to reduce initial divergence or
-  hydrostatic residual after `w` is diagnosed.
-- Log first-20-step startup metrics automatically for real-data runs.
-
-Decision test:
-
-- Eastern Pennsylvania `+1 h`
-- first-step and first-20-step `mean|w|`, `max|w|`, `max|p'|`
-- existing free-stream and canonical gates must stay green
-
-Stop condition:
-
-- If startup burst metrics do not improve materially, abandon quickly.
-
-### Branch 2: `exp/characteristic-openbc`
+### Branch 1: `exp/tskin-slab`
 
 Goal:
 
-- Stop treating `p` and interface `w` like generic scalar fields at the open
-  boundary.
+- Add a minimal prognostic skin-temperature slab so the surface has real heat
+  memory.
 
 Minimal code delta:
 
-- Add dedicated `p/w` boundary routines in `src/core/boundaries.cu`.
-- Keep existing mass-field relaxation for advected fields.
-- Make `p/w` exit treatment mode-aware or at least one-way biased.
+- Add 2D `tskin` state.
+- Update it once per physics step with a tiny slab heat-capacity equation.
+- Feed it into the PBL sensible-heat seam.
+- Output `TSK`.
 
 Decision test:
 
-- new wave-exit or gravity-wave exit mini-case
-- eastern Pennsylvania `+1 h`
-- inspect outer-zone growth versus interior growth
+- Panhandles HRRR `+6 h`
+- compare `T2/RH2` trend and phase without letting wind/reflectivity regress
 
 Stop condition:
 
-- If edge reflections do not drop and the interior still fails first, stop
-  pushing boundary complexity.
+- If `T2/RH2` remain just as stiff, stop growing this branch blindly.
 
-### Branch 3: `exp/column-imex-pw`
+### Branch 2: `exp/surface-diagnostics`
 
 Goal:
 
-- Replace part of the "damp your way through it" strategy with a real vertical
-  `p'-w` column corrector.
+- Separate real 2 m / 10 m diagnostics from lowest-model-level fields.
 
 Minimal code delta:
 
-- Keep the current architecture.
-- Change only the split vertical acoustic step to a columnwise IMEX or
-  tridiagonal corrector.
-- Do not touch horizontal transport or physics in the same branch.
+- Add proper `T2/Q2/U10/V10` diagnostics through the surface-layer path.
+- Keep the solver and physics otherwise unchanged.
 
 Decision test:
 
-- `stretch_900`
-- `stretch_3600`
-- eastern Pennsylvania `+1 h`
-- try reduced `--w-damp` alongside the baseline damping profile
+- Panhandles HRRR comparison panels
+- if the diagnostic story changes materially, keep it even if the slab branch
+  is delayed
 
 Stop condition:
 
-- If it only survives when damping stays just as strong, the complexity is not
-  earning a place.
+- If diagnostics barely move the comparison, do not mistake them for a physics
+  fix.
+
+### Branch 3: `exp/acoustic-uv-pg`
+
+Goal:
+
+- Only if longer runs expose a new solver defect, move fast horizontal PG
+  forcing for `u/v` into the acoustic loop.
+
+Minimal code delta:
+
+- Extract a small `acoustic_horizontal_pg_kernel()`.
+- Apply half-step `u/v` PG kicks around the semi-implicit column solve.
+- Suppress the duplicate slow `u/v` PG path in implicit mode.
+
+Decision test:
+
+- East-PA static `+1 h` and `+6 h`
+- stretched canonical ladder
+
+Stop condition:
+
+- If it does not improve U/V without hurting the canonical ladder, stop.
 
 ## What Looks Exciting But Is Probably Premature
 
@@ -705,11 +783,13 @@ disproportionate breakthrough right now.
 
 The fastest moonshot path is probably:
 
-1. attack startup balance
-2. attack `p/w` boundary semantics
-3. if those still leave too much damping dependency, attack the vertical
-   `p'-w` solve itself
+1. keep `exp/semiimplicit-hdiv-half` as the solver baseline unless the longer
+   runs expose a new fast-loop defect
+2. add the smallest plausible surface thermal memory (`tskin` slab)
+3. improve near-surface diagnostics so HRRR comparisons are fair
+4. only go back to acoustic `u/v` substepping if the longer-horizon solver
+   checks actually justify it
 
-That sequence stays aligned with the current code, the current failures, and
-the current experiment ladder while still aiming above the obvious incremental
-path.
+That keeps the research queue aligned with the current code and the current
+results instead of chasing older solver hypotheses that the branch has already
+outgrown.

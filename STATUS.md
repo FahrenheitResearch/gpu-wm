@@ -1,10 +1,19 @@
 # GPU-WM Status
 
-Last updated: 2026-04-02
+Last updated: 2026-04-01
 
 ## Current Position
 
-`gpu-wm` is a real CUDA regional-model prototype. It is still below WRF-quality on forecast realism and robustness, but the active semi-implicit branch family has now crossed another threshold: the same solver seam that fixes the East-PA real-data `+1 h` case is also starting to line up with the stretched canonical gates instead of trading one benchmark off against the other.
+`gpu-wm` is a real CUDA regional-model prototype. It is still below WRF-quality on full forecast realism and physics breadth, but the current solver branch has now crossed the threshold where the drycore is no longer the main blocker.
+
+The active baseline is `exp/semiimplicit-hdiv-half@df9586b`. That branch now:
+
+- keeps the East-PA terrain-stress benchmark healthy through `+6 h`
+- keeps both static and boundary-forced East-PA runs in the same clean regime
+- fixes the stretched canonical ladder well enough that the old solver tradeoff is no longer dominant
+- keeps the 4 km Panhandles HRRR realism benchmark plausible through `+3 h`
+
+That means the project is now in solver-consolidation mode rather than solver-triage mode. The next major leverage point is surface realism, especially near-surface thermodynamics and proper surface-layer diagnostics, not another broad dycore rewrite unless the longer validations fail.
 
 The newest important change is the active `hdiv_half` refinement on top of `exp/semiimplicit-no-slow-metric@24d7eaf`:
 
@@ -186,10 +195,21 @@ The latest GPT-5.4 Pro review on `main@d92bef2` concluded:
     pressure-predicted `hdiv_half`
 - current result:
   - strongest cross-benchmark solver branch so far
-  - preserves the East-PA static and boundary `+1 h` regional win
-  - now also passes `stretch_900`, `stretch_3600`, and `stretch_21600`
-  - current role: active best solver branch pending `+3 h` East-PA and
-    Panhandles reruns
+  - preserves the East-PA static and boundary `+1 h` regional win:
+    - static `+1 h`: `U/V/THETA = 2.65 / 3.59 / 7.18`, `mean|w| = 0.0857`
+    - boundary `+1 h`: `2.66 / 3.60 / 7.20`, `mean|w| = 0.0859`
+  - now also carries the same East-PA setup through `+6 h`:
+    - static `+6 h`: `U/V/THETA = 11.79 / 12.48 / 16.24`, `mean|w| = 0.1429`, `max|w| = 6.78`, `interior qtot_d = -8.14%`
+    - boundary `+6 h`: `11.66 / 13.34 / 16.51`, `mean|w| = 0.1435`, `max|w| = 6.27`, `interior qtot_d = -7.56%`
+  - still improves the stretched canonical ladder:
+    - `stretch_900`: `2.51 / 3.79 / 13.88`, `mean|w| = 3.93`
+    - `stretch_3600`: `4.33 / 4.83 / 15.13`, `mean|w| = 2.42`
+    - `stretch_21600`: `3.50 / 3.39 / 7.47`, `mean|w| = 0.72`
+  - also keeps the 4 km Panhandles HRRR realism benchmark clean:
+    - static `+3 h`: `4.71 / 7.32 / 8.55`, `mean|w| = 0.1291`
+    - boundary `+3 h`: `4.71 / 7.32 / 8.55`, `mean|w| = 0.1291`
+  - current role: best solver baseline, with `+12 h` East-PA and Panhandles
+    durability runs in progress
 
 ## Best Verified Canonical Gate Result So Far
 
@@ -210,63 +230,48 @@ These matched on both:
 
 ## Current Regional Reality
 
-Medium real-data regional runs are now materially better on `exp/openbc-no-w-relax`.
+Real-data regional runs are now in a different regime than they were on
+`exp/openbc-no-w-relax`.
 
-The eastern Pennsylvania 4 km terrain-following regional setup:
+The eastern Pennsylvania terrain-stress benchmark:
 
-- grid: `768 x 640 x 50`
+- grid: `768 x 640 x 50 @ 4 km`
 - data: `2026-04-01 00z` GFS-derived init
-- horizon tested: `+1 h`
+- best current branch: `exp/semiimplicit-hdiv-half@df9586b`
 
-Current behavior:
+Current behavior on that branch:
 
-- the active branch survives to `+1 h` on both the local RTX 5090 and the remote H100
-- representative `dt=8`, `alpha=6.0`, `blend=1.0` results at `+1 h`:
-  - `mean_w = +0.506 m/s`
-  - `mean|w| = 1.697 m/s`
-  - `max|w| = 18.28 m/s`
-  - `U/V/THETA rmse = 12.60 / 8.56 / 33.03`
-- the local boundary-forced run and the remote static run matched closely at this horizon
+- static `+1 h`: `U/V/THETA = 2.65 / 3.59 / 7.18`, `mean|w| = 0.0857`
+- boundary `+1 h`: `2.66 / 3.60 / 7.20`, `mean|w| = 0.0859`
+- static `+3 h`: `6.29 / 8.61 / 10.68`, `mean|w| = 0.1070`
+- boundary `+3 h`: `6.24 / 8.81 / 10.79`, `mean|w| = 0.1072`
+- static `+6 h`: `11.79 / 12.48 / 16.24`, `mean|w| = 0.1429`, `max|w| = 6.78`
+- boundary `+6 h`: `11.66 / 13.34 / 16.51`, `mean|w| = 0.1435`, `max|w| = 6.27`
 
 Interpretation:
 
-- freeing lateral `w` was a major regional-stability lever
-- startup-balanced interface `w` removed the old catastrophic `+1 h` failure mode, but has looked mostly neutral on the surviving `+1 h` branch so far
-- the project is now in a "survives but drifts" regime instead of an "instant blow-up" regime on this case
-- the next problem is quality and longer-horizon robustness, not immediate `w/p` runaway at `+1 h`
+- the model is no longer in the old "survives but drifts badly by `+1 h`"
+  regime
+- the fast vertical pair is now settled enough that both static and
+  boundary-forced East-PA runs stay in the same healthy regime through `+6 h`
+- there is still forecast error growth, but not the old solver-style runaway
 
-Additional regional signal:
+The Oklahoma / Texas Panhandles realism benchmark now matters as a second
+validation target, not just a demo:
 
-- the best regional control so far is the H100 static `dt=6`, `alpha=6.0`, `blend=1.0` run:
-  - `mean_w = +0.240 m/s`
-  - `mean|w| = 1.085 m/s`
-  - `max|w| = 34.58 m/s`
-  - `U/V/THETA rmse = 11.09 / 8.23 / 29.08`
-- stronger damping at `alpha=8.0` did not clearly beat `alpha=6.0`
-- static and boundary-forced `dt=8`, `alpha=6.0` runs matched closely at `+1 h`, which weakens the case that the first-hour failure is boundary-driven
-- a longer H100 boundary-forced `dt=6`, `alpha=6.0`, `blend=1.0` control has now been verified through `+1.5 h`:
-  - `mean_w = +0.274 m/s`
-  - `mean|w| = 1.391 m/s`
-  - `max|w| = 32.59 m/s`
-  - `U/V/THETA rmse = 14.12 / 11.26 / 37.91`
-  - `outer_20 qtot_d = -7.98%`
-  - `interior qtot_d = -27.04%`
-  - interpretation: the branch is no longer failing by immediate runaway, but the same interior moisture/thermal drift pattern is still present beyond `+1 h`
-- the semi-implicit prototype changes that picture sharply on the static `+1 h` regional case:
-  - `mean_w = +0.0015 m/s`
-  - `mean|w| = 0.1580 m/s`
-  - `max|w| = 6.28 m/s`
-  - `U/V/THETA rmse = 3.51 / 4.09 / 10.21`
-  - `outer_20 qtot_burden_d = -0.32%`
-  - `interior qtot_burden_d = -4.93%`
-  - interpretation: this is the first branch that looks like a non-incremental solver gain on the real East-PA target, not just another neutral cleanup
-- the same branch now matches that gain on the boundary-forced `+1 h` East-PA case:
-  - `mean|w| = 0.1583 m/s`
-  - `max|w| = 6.43 m/s`
-  - `U/V/THETA rmse = 3.52 / 4.10 / 10.23`
-  - `outer_20 qtot_d = -0.10%`
-  - `interior qtot_d = -4.27%`
-  - interpretation: this is no longer just a static-case win
+- grid: `512 x 384 x 50 @ 4 km`
+- data: `2026-04-01 19z` HRRR
+- `+1 h`: `2.25 / 2.67 / 5.58`, `mean|w| = 0.1158`
+- `+2 h`: `3.45 / 4.96 / 7.03`, `mean|w| = 0.1223`
+- `+3 h` static: `4.71 / 7.32 / 8.55`, `mean|w| = 0.1291`
+- `+3 h` boundary: `4.71 / 7.32 / 8.55`, `mean|w| = 0.1291`
+
+Interpretation:
+
+- the new solver branch is not only holding on a terrain-stress case
+- it is also producing plausible short-range Plains structure against HRRR
+- the main visible weakness on this benchmark is now surface thermodynamics,
+  not the core flow or reflectivity structure
 
 Ops note:
 
@@ -351,33 +356,45 @@ Interpretation:
 
 ## Fresh Moonshot Directions
 
-Three fresh moonshot reviews are now concrete enough to test, in this order:
+The active solver moonshot has now been promoted. The next research-sidecar
+work is a realism step, not another broad drycore rewrite.
 
-1. pressure-only radiative fast open boundary
-   - rationale: if a boundary experiment is going to matter, the cleanest first try is to make `p` less reflective during the fast acoustic refresh, not to fake a lateral `p-w` characteristic pair
-   - smallest branch: fast-step `p` strip-history / Orlanski-style radiation only; leave lateral `w` unchanged at first
-2. columnwise semi-implicit vertical acoustic `p-w` corrector
-   - rationale: the smallest serious numerics jump that could beat another damping sweep is a one-thread-per-column tridiagonal solve for the stiff vertical acoustic pair
-   - this is larger than the first two ideas and should stay behind them unless the smaller transport/boundary experiments flatline
-3. revisit moisture transport only after the failure mechanism is narrower
-   - rationale: the direct conservative moisture branches already failed
-   - the next moisture experiment should be driven by a sharper mechanism diagnosis, not another blind transport rewrite
+1. minimal slab surface energy-balance model with prognostic `tskin`
+   - rationale: the current solver branch is now good enough that the biggest
+     visible weakness is stiff near-surface `T2/RH2` evolution against HRRR
+   - smallest branch:
+     - add a 2D `tskin`
+     - update it with a one-layer surface heat-capacity equation
+     - feed it into the existing PBL surface flux path
+2. proper near-surface diagnostics
+   - rationale: current `T2/Q2/U10/V10` are still lowest-model-level fields,
+     not true surface-layer diagnostics
+   - smallest branch:
+     - add `TSK`
+     - separate diagnostic `T2/Q2/U10/V10` from raw lowest-level output
+3. wire radiation only after the slab branch exists
+   - rationale: the existing radiation module by itself does not create a
+     surface thermal memory; it only becomes a clean realism lever after the
+     surface has its own state
 
 ## Immediate Next Work
 
 The next implementation target is:
 
-1. finish the `+1 h` confirmation matrix now in progress on both the local 5090 and the H100:
-   - boundary-forced `dt=6`, `alpha=6.0`
-   - boundary-forced `dt=8`, `alpha=6.0`
-   - static `dt=6` follow-ups only if they buy real quality, not just margin
-2. patch the remaining slow-path `w` kernels to true interface semantics, starting with:
-   - `pressure_gradient_kernel()` `w_tend`
-   - `buoyancy_kernel()`
-   - dedicated interface-aware `w` diffusion / sanitize / Rayleigh
-3. add one interior-vs-outer budget diagnostic for `qtot` and `THETA` so regional drift is measurable, not guessed
-4. keep startup diagnostics in place, but do not treat startup balance alone as the main explanation anymore
-5. after the slow `w` cleanup, revisit a dedicated interface-aware lateral `w` boundary operator instead of generic scalar semantics
+1. finish the in-flight `+12 h` durability checks on `exp/semiimplicit-hdiv-half`
+   - East-PA static
+   - Panhandles static
+2. freeze `exp/semiimplicit-hdiv-half` as the working solver baseline unless
+   those longer runs reveal a new fast-loop defect
+3. start the first small realism branch:
+   - add prognostic 2D `tskin`
+   - feed it into the existing surface sensible-heat seam in `run_pbl()`
+   - add `TSK` output
+4. keep the corrected HRRR comparison path in place
+   - the GRIB reader now validates cached message offsets so `f02` no longer
+     misreads `2 m temperature`
+5. only return to fast-loop `u/v` acoustic PG substepping if the `+12 h`
+   durability runs expose a new solver-specific failure
 
 ## Experiment Discipline
 
@@ -388,4 +405,5 @@ Any change should be judged in this order:
 3. eastern Pennsylvania `+1 h` regional case
 4. only then larger or longer real-data runs
 
-The project is not blocked by missing sophisticated physics right now. It is blocked by making the solver numerically boring on real-data terrain-following regional domains and then making those surviving runs look meteorologically cleaner.
+The project is no longer blocked primarily by the drycore. The current blocker
+is the first layer of realism work on top of the now-usable solver baseline.
