@@ -37,6 +37,12 @@ struct ModelConfig {
     double z0 = 0.1;            // Surface roughness (m)
     double theta_sfc = 300.0;   // Surface temperature (K)
     double qv_sfc = 0.015;
+    double tskin_heat_capacity = 2.0e5;   // J m^-2 K^-1
+    double tskin_restore_coeff = 12.0;    // W m^-2 K^-1
+    double tskin_anchor_weight = 0.15;    // blend toward diagnosed surface theta
+    double tskin_admittance_seam_strength = 0.0; // 0 disables spatial admittance modulation
+    double tskin_moisture_gate_strength = 0.0;   // 0 disables heterogeneity-linked surface qv reduction
+    double tskin_moisture_memory_timescale = 1800.0; // s, lagged surface moisture-availability response time
     StabilityControlConfig stability;
 
     // Boundary conditions

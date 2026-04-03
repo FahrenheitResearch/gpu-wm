@@ -4,8 +4,10 @@ project(gpu-wm LANGUAGES CXX CUDA)
 set(CMAKE_CUDA_STANDARD 17)
 set(CMAKE_CXX_STANDARD 17)
 
-# Auto-detect GPU architecture
-set(CMAKE_CUDA_ARCHITECTURES native)
+# Auto-detect GPU architecture unless the caller overrides it.
+if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
+    set(CMAKE_CUDA_ARCHITECTURES native)
+endif()
 
 # Optimization flags
 set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --use_fast_math -O3")

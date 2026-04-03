@@ -92,6 +92,7 @@ struct StateGPU {
     // Terrain height (2D) - real_t
     real_t* terrain;         // terrain height (m) [nx * ny]
     real_t* tskin;           // prognostic surface skin temperature surrogate (K) [nx * ny]
+    real_t* moistmem;        // lagged surface moisture-availability scale [0..1] [nx * ny]
 
     // Tendency arrays (for RK3 time integration) - real_t
     real_t* u_tend;
@@ -166,6 +167,7 @@ inline void allocate_state(StateGPU& state, const GridConfig& grid) {
     // Terrain (2D) - real_t
     CUDA_CHECK(cudaMalloc(&state.terrain, n2d * sizeof(real_t)));
     CUDA_CHECK(cudaMalloc(&state.tskin,   n2d * sizeof(real_t)));
+    CUDA_CHECK(cudaMalloc(&state.moistmem, n2d * sizeof(real_t)));
 
     // Zero everything
     CUDA_CHECK(cudaMemset(state.u,     0, n3d_h * sizeof(real_t)));
@@ -187,6 +189,7 @@ inline void allocate_state(StateGPU& state, const GridConfig& grid) {
     CUDA_CHECK(cudaMemset(state.qr_tend,    0, n3d_h * sizeof(real_t)));
     CUDA_CHECK(cudaMemset(state.terrain, 0, n2d * sizeof(real_t)));
     CUDA_CHECK(cudaMemset(state.tskin,   0, n2d * sizeof(real_t)));
+    CUDA_CHECK(cudaMemset(state.moistmem, 0, n2d * sizeof(real_t)));
 }
 
 inline void free_grid_metrics(GridConfig& grid) {
@@ -218,6 +221,7 @@ inline void free_state(StateGPU& state) {
     cudaFree(state.eta);        cudaFree(state.eta_m);
     cudaFree(state.terrain);
     cudaFree(state.tskin);
+    cudaFree(state.moistmem);
 }
 
 // Index helpers for 3D arrays with halo

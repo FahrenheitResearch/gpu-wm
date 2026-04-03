@@ -47,11 +47,18 @@ void run_microphysics_thompson(StateGPU& state, const GridConfig& grid, double d
 void run_radiation(StateGPU& state, const GridConfig& grid,
                    double solar_zenith_cos, double solar_constant);
 void run_pbl(StateGPU& state, const GridConfig& grid,
-             double z0, double qv_sfc, double cs, double dt);
+             double z0, double qv_sfc, double moisture_gate_strength, double cs, double dt);
 void initialize_tskin_from_surface_layer(StateGPU& state, const GridConfig& grid,
                                          double theta_sfc);
+void initialize_surface_moisture_memory(StateGPU& state, const GridConfig& grid,
+                                        double moisture_gate_strength);
 void update_tskin_slab(StateGPU& state, const GridConfig& grid,
-                       double z0, double theta_sfc, double qv_sfc, double dt);
+                       double z0, double theta_sfc, double qv_sfc,
+                       double skin_heat_capacity, double ground_restore_coeff,
+                       double anchor_weight, double admittance_seam_strength,
+                       double moisture_gate_strength,
+                       double moisture_memory_timescale,
+                       double dt);
 void print_diagnostics(const StateGPU& state, const GridConfig& grid,
                        double time, int step,
                        const StabilityControlConfig& stability_cfg);
@@ -59,7 +66,8 @@ void write_output(const StateGPU& state, const GridConfig& grid,
                   double time, int output_num);
 void write_netcdf(const StateGPU& state, const GridConfig& grid,
                   const LambertConformal& proj,
-                  double time, int output_num);
+                  double time, int output_num, double z0, double qv_sfc,
+                  double moisture_gate_strength);
 bool init_from_gfs(StateGPU& state, const GridConfig& grid,
                    const LambertConformal& proj, const char* gfs_file);
 bool load_gfs_binary(StateGPU& state, GridConfig& grid, const char* filename);
@@ -94,6 +102,7 @@ void copy_state(StateGPU& dst, const StateGPU& src, const GridConfig& grid) {
     copy_field_kernel<<<grid1d, block>>>(dst.qr, src.qr, n_total);
     copy_field_kernel<<<grid1d, block>>>(dst.p, src.p, n_total);
     copy_field_kernel<<<grid2d, block>>>(dst.tskin, src.tskin, n2d);
+    copy_field_kernel<<<grid2d, block>>>(dst.moistmem, src.moistmem, n2d);
 }
 
 __global__ void blend_field_kernel(
@@ -168,6 +177,7 @@ void blend_boundary_state(
     blend_field_kernel<<<grid1d, block>>>(dst.qr, src_a.qr, src_b.qr, alpha, n_total);
     blend_field_kernel<<<grid1d, block>>>(dst.p, src_a.p, src_b.p, alpha, n_total);
     blend_field_kernel<<<grid2d, block>>>(dst.tskin, src_a.tskin, src_b.tskin, alpha, n2d);
+    blend_field_kernel<<<grid2d, block>>>(dst.moistmem, src_a.moistmem, src_b.moistmem, alpha, n2d);
 
     int nz = grid.nz;
     int grid1d_z = (nz + block - 1) / block;
@@ -326,6 +336,12 @@ int main(int argc, char** argv) {
         else if (strcmp(argv[i], "--boundary-next") == 0 && i+1 < argc) strncpy(boundary_next_file, argv[++i], sizeof(boundary_next_file)-1);
         else if (strcmp(argv[i], "--boundary-interval") == 0 && i+1 < argc) boundary_interval = atof(argv[++i]);
         else if (strcmp(argv[i], "--kdiff") == 0 && i+1 < argc) cfg.kdiff = atof(argv[++i]);
+        else if (strcmp(argv[i], "--tskin-heat-capacity") == 0 && i+1 < argc) cfg.tskin_heat_capacity = atof(argv[++i]);
+        else if (strcmp(argv[i], "--tskin-restore-coeff") == 0 && i+1 < argc) cfg.tskin_restore_coeff = atof(argv[++i]);
+        else if (strcmp(argv[i], "--tskin-anchor-weight") == 0 && i+1 < argc) cfg.tskin_anchor_weight = atof(argv[++i]);
+        else if (strcmp(argv[i], "--tskin-admittance-seam-strength") == 0 && i+1 < argc) cfg.tskin_admittance_seam_strength = atof(argv[++i]);
+        else if (strcmp(argv[i], "--tskin-moisture-gate-strength") == 0 && i+1 < argc) cfg.tskin_moisture_gate_strength = atof(argv[++i]);
+        else if (strcmp(argv[i], "--tskin-moisture-memory-timescale") == 0 && i+1 < argc) cfg.tskin_moisture_memory_timescale = atof(argv[++i]);
         else if (strcmp(argv[i], "--no-adaptive-stab") == 0) cfg.stability.enabled = 0;
         else if (strcmp(argv[i], "--w-damp") == 0) cfg.stability.w_cfl_damping = 1;
         else if (strcmp(argv[i], "--w-damp-alpha") == 0 && i+1 < argc) cfg.stability.w_damping_alpha = atof(argv[++i]);
@@ -375,6 +391,12 @@ int main(int argc, char** argv) {
             printf("  --diag-interval N   Print runtime diagnostics every N steps (default: 100)\n\n");
             printf("Physics:\n");
             printf("  --kdiff K           Horizontal diffusion (m^2/s, default: 100)\n");
+            printf("  --tskin-heat-capacity C  Slab heat capacity (J m^-2 K^-1, default: 2e5)\n");
+            printf("  --tskin-restore-coeff R  Slab restore coefficient (W m^-2 K^-1, default: 12)\n");
+            printf("  --tskin-anchor-weight A  Slab anchor blend to column diagnostic (0..1, default: 0.15)\n");
+            printf("  --tskin-admittance-seam-strength S  Spatial slab admittance seam strength (0 disables, default: 0)\n");
+            printf("  --tskin-moisture-gate-strength M  Reduce surface qv availability in heterogeneity-active cells (0 disables, default: 0)\n");
+            printf("  --tskin-moisture-memory-timescale T  Moisture-gate response time (s, default: 1800)\n");
             printf("  --thompson          Use Thompson mixed-phase microphysics (default: Kessler)\n");
             printf("  --no-adaptive-stab  Disable norm-based adaptive stabilization\n");
             printf("  --w-damp            Enable WRF-style vertical CFL damping on interface w\n");
@@ -483,6 +505,10 @@ int main(int argc, char** argv) {
             printf(" (diagnostics on)");
         }
         printf("\n");
+        printf("surface slab: C=%.3g J m^-2 K^-1  restore=%.2f W m^-2 K^-1  anchor=%.2f  admittance-seam=%.2f  moisture-gate=%.2f  moisture-memory=%.0f s\n",
+               cfg.tskin_heat_capacity, cfg.tskin_restore_coeff,
+               cfg.tskin_anchor_weight, cfg.tskin_admittance_seam_strength,
+               cfg.tskin_moisture_gate_strength, cfg.tskin_moisture_memory_timescale);
         printf("Output: %s\n\n", use_netcdf ? "NetCDF" : "binary");
 
         if (mem_est > prop.totalGlobalMem * 0.9) {
@@ -497,6 +523,12 @@ int main(int argc, char** argv) {
     double theta_sfc = cfg.theta_sfc;
     double qv_sfc = cfg.qv_sfc;
     double cs_smag = cfg.cs_smag;
+    double tskin_heat_capacity = cfg.tskin_heat_capacity;
+    double tskin_restore_coeff = cfg.tskin_restore_coeff;
+    double tskin_anchor_weight = cfg.tskin_anchor_weight;
+    double tskin_admittance_seam_strength = cfg.tskin_admittance_seam_strength;
+    double tskin_moisture_gate_strength = cfg.tskin_moisture_gate_strength;
+    double tskin_moisture_memory_timescale = cfg.tskin_moisture_memory_timescale;
 
     // Create output directory
     mkdir("output", 0755);
@@ -530,6 +562,7 @@ int main(int argc, char** argv) {
         initialize_w_from_continuity(state, grid, "primary-init");
     }
     initialize_tskin_from_surface_layer(state, grid, theta_sfc);
+    initialize_surface_moisture_memory(state, grid, tskin_moisture_gate_strength);
     print_case_summary(grid);
 
     allocate_state(state_old, grid);
@@ -577,6 +610,8 @@ int main(int argc, char** argv) {
             }
             convert_w_to_contravariant(node.state, grid);
             initialize_w_from_continuity(node.state, grid, spec.path.c_str());
+            initialize_tskin_from_surface_layer(node.state, node.grid, theta_sfc);
+            initialize_surface_moisture_memory(node.state, node.grid, tskin_moisture_gate_strength);
         }
 
         std::sort(boundary_nodes.begin(), boundary_nodes.end(),
@@ -598,7 +633,7 @@ int main(int argc, char** argv) {
 
     // Initial output
     if (use_netcdf) {
-        write_netcdf(state, grid, proj, 0.0, 0);
+        write_netcdf(state, grid, proj, 0.0, 0, z0, qv_sfc, tskin_moisture_gate_strength);
     } else {
         write_output(state, grid, 0.0, 0);
     }
@@ -681,8 +716,11 @@ int main(int argc, char** argv) {
 
         // PBL: implicit vertical diffusion + surface layer
         if (cfg.test_case == 3 || gfs_mode) {
-            update_tskin_slab(state, grid, z0, theta_sfc, qv_sfc, dt);
-            run_pbl(state, grid, z0, qv_sfc, cs_smag, dt);
+            update_tskin_slab(state, grid, z0, theta_sfc, qv_sfc,
+                              tskin_heat_capacity, tskin_restore_coeff,
+                              tskin_anchor_weight, tskin_admittance_seam_strength,
+                              tskin_moisture_gate_strength, tskin_moisture_memory_timescale, dt);
+            run_pbl(state, grid, z0, qv_sfc, tskin_moisture_gate_strength, cs_smag, dt);
         }
 
         // Boundary conditions after physics
@@ -707,7 +745,7 @@ int main(int argc, char** argv) {
         if (time >= next_output - 0.5 * dt) {
             CUDA_CHECK(cudaDeviceSynchronize());
             if (use_netcdf) {
-                write_netcdf(state, grid, proj, time, output_num);
+                write_netcdf(state, grid, proj, time, output_num, z0, qv_sfc, tskin_moisture_gate_strength);
             } else {
                 write_output(state, grid, time, output_num);
             }

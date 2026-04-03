@@ -7,6 +7,7 @@
 #include "../../include/constants.cuh"
 #include "../../include/grid.cuh"
 #include "../../include/projection.cuh"
+#include "../../include/surface_layer.cuh"
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -297,7 +298,8 @@ static inline double vapor_epsilon() {
 #ifdef HAS_NETCDF
 void write_netcdf(const StateGPU& state, const GridConfig& grid,
                   const LambertConformal& proj,
-                  double time, int output_num) {
+                  double time, int output_num, double z0, double qv_sfc,
+                  double moisture_gate_strength) {
     char filename[256];
     snprintf(filename, sizeof(filename), "output/gpuwm_%06d.nc", output_num);
 
@@ -376,7 +378,8 @@ void write_netcdf(const StateGPU& state, const GridConfig& grid,
     int dims_time_w[] = {dim_time_wrf, dim_bt_stag, dim_sn, dim_we};
 
     int var_times, var_xlat, var_xlong, var_hgt, var_mapfac_m, var_cosalpha, var_sinalpha;
-    int var_psfc, var_t2, var_q2, var_u10, var_v10, var_tsk;
+    int var_psfc, var_t2, var_q2, var_rh2, var_u10, var_v10, var_tsk, var_admitseam, var_moistgate, var_moistmem;
+    int var_t2_lml, var_q2_lml, var_rh2_lml, var_u10_lml, var_v10_lml;
     int var_p, var_pb, var_ph, var_phb, var_t_wrf, var_qvapor, var_qcloud, var_qrain;
     int var_u_wrf, var_v_wrf, var_w_wrf;
 
@@ -390,9 +393,18 @@ void write_netcdf(const StateGPU& state, const GridConfig& grid,
     NC_CHECK(nc_def_var(ncid, "PSFC", NC_FLOAT, 3, dims_time_2d, &var_psfc));
     NC_CHECK(nc_def_var(ncid, "T2", NC_FLOAT, 3, dims_time_2d, &var_t2));
     NC_CHECK(nc_def_var(ncid, "Q2", NC_FLOAT, 3, dims_time_2d, &var_q2));
+    NC_CHECK(nc_def_var(ncid, "RH2", NC_FLOAT, 3, dims_time_2d, &var_rh2));
     NC_CHECK(nc_def_var(ncid, "U10", NC_FLOAT, 3, dims_time_2d, &var_u10));
     NC_CHECK(nc_def_var(ncid, "V10", NC_FLOAT, 3, dims_time_2d, &var_v10));
     NC_CHECK(nc_def_var(ncid, "TSK", NC_FLOAT, 3, dims_time_2d, &var_tsk));
+    NC_CHECK(nc_def_var(ncid, "ADMITSEAM", NC_FLOAT, 3, dims_time_2d, &var_admitseam));
+    NC_CHECK(nc_def_var(ncid, "MOISTGATE", NC_FLOAT, 3, dims_time_2d, &var_moistgate));
+    NC_CHECK(nc_def_var(ncid, "MOISTMEM", NC_FLOAT, 3, dims_time_2d, &var_moistmem));
+    NC_CHECK(nc_def_var(ncid, "T2_LML", NC_FLOAT, 3, dims_time_2d, &var_t2_lml));
+    NC_CHECK(nc_def_var(ncid, "Q2_LML", NC_FLOAT, 3, dims_time_2d, &var_q2_lml));
+    NC_CHECK(nc_def_var(ncid, "RH2_LML", NC_FLOAT, 3, dims_time_2d, &var_rh2_lml));
+    NC_CHECK(nc_def_var(ncid, "U10_LML", NC_FLOAT, 3, dims_time_2d, &var_u10_lml));
+    NC_CHECK(nc_def_var(ncid, "V10_LML", NC_FLOAT, 3, dims_time_2d, &var_v10_lml));
     NC_CHECK(nc_def_var(ncid, "P", NC_FLOAT, 4, dims_time_3d, &var_p));
     NC_CHECK(nc_def_var(ncid, "PB", NC_FLOAT, 4, dims_time_3d, &var_pb));
     NC_CHECK(nc_def_var(ncid, "PH", NC_FLOAT, 4, dims_time_w, &var_ph));
@@ -417,6 +429,7 @@ void write_netcdf(const StateGPU& state, const GridConfig& grid,
     NC_CHECK(nc_def_var_deflate(ncid, var_temp, 0, 1, 4));
     NC_CHECK(nc_def_var_deflate(ncid, var_rho, 0, 1, 4));
     NC_CHECK(nc_def_var_deflate(ncid, var_rh, 0, 1, 4));
+    NC_CHECK(nc_def_var_deflate(ncid, var_rh2, 0, 1, 4));
     NC_CHECK(nc_def_var_deflate(ncid, var_p, 0, 1, 4));
     NC_CHECK(nc_def_var_deflate(ncid, var_pb, 0, 1, 4));
     NC_CHECK(nc_def_var_deflate(ncid, var_ph, 0, 1, 4));
@@ -428,6 +441,14 @@ void write_netcdf(const StateGPU& state, const GridConfig& grid,
     NC_CHECK(nc_def_var_deflate(ncid, var_u_wrf, 0, 1, 4));
     NC_CHECK(nc_def_var_deflate(ncid, var_v_wrf, 0, 1, 4));
     NC_CHECK(nc_def_var_deflate(ncid, var_w_wrf, 0, 1, 4));
+    NC_CHECK(nc_def_var_deflate(ncid, var_t2_lml, 0, 1, 4));
+    NC_CHECK(nc_def_var_deflate(ncid, var_q2_lml, 0, 1, 4));
+    NC_CHECK(nc_def_var_deflate(ncid, var_rh2_lml, 0, 1, 4));
+    NC_CHECK(nc_def_var_deflate(ncid, var_u10_lml, 0, 1, 4));
+    NC_CHECK(nc_def_var_deflate(ncid, var_v10_lml, 0, 1, 4));
+    NC_CHECK(nc_def_var_deflate(ncid, var_admitseam, 0, 1, 4));
+    NC_CHECK(nc_def_var_deflate(ncid, var_moistgate, 0, 1, 4));
+    NC_CHECK(nc_def_var_deflate(ncid, var_moistmem, 0, 1, 4));
 
     // Attributes
     nc_put_att_text(ncid, NC_GLOBAL, "title", 26, "GPU-WM Weather Model Output");
@@ -442,8 +463,11 @@ void write_netcdf(const StateGPU& state, const GridConfig& grid,
                     strlen("TERRAIN_SLOPE is a diagnostic derived from centered terrain height differences"),
                     "TERRAIN_SLOPE is a diagnostic derived from centered terrain height differences");
     nc_put_att_text(ncid, NC_GLOBAL, "wrf_compatibility_note",
-                    strlen("WRF-compatible fields use synthesized staggering, a prognostic slab TSK field, and lowest-model-level surface approximations for T2/Q2/U10/V10"),
-                    "WRF-compatible fields use synthesized staggering, a prognostic slab TSK field, and lowest-model-level surface approximations for T2/Q2/U10/V10");
+                    strlen("WRF-compatible fields use synthesized staggering, a prognostic slab TSK field, and screen-level T2/Q2/RH2/U10/V10 diagnostics while retaining legacy *_LML proxy fields"),
+                    "WRF-compatible fields use synthesized staggering, a prognostic slab TSK field, and screen-level T2/Q2/RH2/U10/V10 diagnostics while retaining legacy *_LML proxy fields");
+    nc_put_att_text(ncid, NC_GLOBAL, "screen_diag_revision",
+                    strlen("screen2-admitseam-moistmem-v1"),
+                    "screen2-admitseam-moistmem-v1");
     nc_put_att_text(ncid, NC_GLOBAL, "times_note",
                     strlen("Times stores UTC valid time from init metadata when available; otherwise it falls back to epoch plus elapsed seconds"),
                     "Times stores UTC valid time from init metadata when available; otherwise it falls back to epoch plus elapsed seconds");
@@ -476,6 +500,58 @@ void write_netcdf(const StateGPU& state, const GridConfig& grid,
     nc_put_att_text(ncid, var_tsk, "units", 1, "K");
     nc_put_att_text(ncid, var_tsk, "long_name",
                     strlen("slab skin temperature"), "slab skin temperature");
+    nc_put_att_text(ncid, var_admitseam, "units", 1, "1");
+    nc_put_att_text(ncid, var_admitseam, "long_name",
+                    strlen("soil thermal admittance seam factor"),
+                    "soil thermal admittance seam factor");
+    nc_put_att_text(ncid, var_moistgate, "units", 1, "1");
+    nc_put_att_text(ncid, var_moistgate, "long_name",
+                    strlen("instantaneous surface moisture availability target"),
+                    "instantaneous surface moisture availability target");
+    nc_put_att_text(ncid, var_moistmem, "units", 1, "1");
+    nc_put_att_text(ncid, var_moistmem, "long_name",
+                    strlen("lagged surface moisture availability state"),
+                    "lagged surface moisture availability state");
+    nc_put_att_text(ncid, var_t2, "units", 1, "K");
+    nc_put_att_text(ncid, var_t2, "long_name",
+                    strlen("screen-level 2 m temperature diagnostic"),
+                    "screen-level 2 m temperature diagnostic");
+    nc_put_att_text(ncid, var_q2, "units", 5, "kg/kg");
+    nc_put_att_text(ncid, var_q2, "long_name",
+                    strlen("screen-level 2 m moisture proxy from the first prognostic mass level"),
+                    "screen-level 2 m moisture proxy from the first prognostic mass level");
+    nc_put_att_text(ncid, var_rh2, "units", 1, "%");
+    nc_put_att_text(ncid, var_rh2, "long_name",
+                    strlen("screen-level 2 m relative humidity diagnostic"),
+                    "screen-level 2 m relative humidity diagnostic");
+    nc_put_att_text(ncid, var_u10, "units", 3, "m/s");
+    nc_put_att_text(ncid, var_u10, "long_name",
+                    strlen("screen-level 10 m x-wind diagnostic"),
+                    "screen-level 10 m x-wind diagnostic");
+    nc_put_att_text(ncid, var_v10, "units", 3, "m/s");
+    nc_put_att_text(ncid, var_v10, "long_name",
+                    strlen("screen-level 10 m y-wind diagnostic"),
+                    "screen-level 10 m y-wind diagnostic");
+    nc_put_att_text(ncid, var_t2_lml, "units", 1, "K");
+    nc_put_att_text(ncid, var_t2_lml, "long_name",
+                    strlen("legacy lowest-model-level temperature proxy"),
+                    "legacy lowest-model-level temperature proxy");
+    nc_put_att_text(ncid, var_q2_lml, "units", 5, "kg/kg");
+    nc_put_att_text(ncid, var_q2_lml, "long_name",
+                    strlen("legacy lowest-model-level moisture proxy"),
+                    "legacy lowest-model-level moisture proxy");
+    nc_put_att_text(ncid, var_rh2_lml, "units", 1, "%");
+    nc_put_att_text(ncid, var_rh2_lml, "long_name",
+                    strlen("legacy lowest-model-level relative humidity proxy"),
+                    "legacy lowest-model-level relative humidity proxy");
+    nc_put_att_text(ncid, var_u10_lml, "units", 3, "m/s");
+    nc_put_att_text(ncid, var_u10_lml, "long_name",
+                    strlen("legacy lowest-model-level x-wind proxy"),
+                    "legacy lowest-model-level x-wind proxy");
+    nc_put_att_text(ncid, var_v10_lml, "units", 3, "m/s");
+    nc_put_att_text(ncid, var_v10_lml, "long_name",
+                    strlen("legacy lowest-model-level y-wind proxy"),
+                    "legacy lowest-model-level y-wind proxy");
 
     nc_put_att_text(ncid, var_z, "units", 1, "m");
     nc_put_att_text(ncid, var_z, "long_name", strlen("geometric height of mass levels"),
@@ -663,6 +739,8 @@ void write_netcdf(const StateGPU& state, const GridConfig& grid,
     std::vector<float> qv_mass(n3d, 0.0f);
     std::vector<float> p_pert_mass(n3d, 0.0f);
     std::vector<float> pressure_mass(n3d, 0.0f);
+    std::vector<float> u_mass(n3d, 0.0f);
+    std::vector<float> v_mass(n3d, 0.0f);
     std::vector<float> u10(n2d, 0.0f);
     std::vector<float> v10(n2d, 0.0f);
     real_t* d_w_phys = nullptr;
@@ -688,6 +766,12 @@ void write_netcdf(const StateGPU& state, const GridConfig& grid,
     NC_CHECK(nc_put_var_float(ncid, var_qv, qv_mass.data()));
     NC_CHECK(nc_put_var_float(ncid, var_qvapor, qv_mass.data()));
 
+    copy_mass_field(state.u, u_mass);
+    NC_CHECK(nc_put_var_float(ncid, var_u_mass, u_mass.data()));
+
+    copy_mass_field(state.v, v_mass);
+    NC_CHECK(nc_put_var_float(ncid, var_v_mass, v_mass.data()));
+
     copy_mass_field(state.p, p_pert_mass);
     NC_CHECK(nc_put_var_float(ncid, var_p, p_pert_mass.data()));
 
@@ -703,7 +787,18 @@ void write_netcdf(const StateGPU& state, const GridConfig& grid,
     std::vector<float> psfc(n2d, 0.0f);
     std::vector<float> t2(n2d, 0.0f);
     std::vector<float> q2(n2d, 0.0f);
+    std::vector<float> rh2(n2d, 0.0f);
+    std::vector<float> t2_lml(n2d, 0.0f);
+    std::vector<float> q2_lml(n2d, 0.0f);
+    std::vector<float> rh2_lml(n2d, 0.0f);
+    std::vector<float> u10_lml(n2d, 0.0f);
+    std::vector<float> v10_lml(n2d, 0.0f);
     std::vector<float> tsk(n2d, 0.0f);
+    std::vector<float> admitseam(n2d, 0.0f);
+    std::vector<float> moistgate(n2d, 0.0f);
+    std::vector<float> moistmem(n2d, 0.0f);
+    CUDA_CHECK(cudaMemcpy(tsk.data(), state.tskin, n2d * sizeof(real_t), cudaMemcpyDeviceToHost));
+    CUDA_CHECK(cudaMemcpy(moistmem.data(), state.moistmem, n2d * sizeof(real_t), cudaMemcpyDeviceToHost));
     for (int k = 0; k < nz; ++k) {
         double eta_k = grid.eta_m ? grid.eta_m[k] : ((k + 0.5) / nz);
         for (int j = 0; j < ny; ++j) {
@@ -736,16 +831,6 @@ void write_netcdf(const StateGPU& state, const GridConfig& grid,
                 double qvs = vapor_epsilon() * es / fmax(p_full - es, 1.0);
                 double rh = 100.0 * qv_val / fmax(qvs, 1.0e-12);
                 rh = fmin(100.0, fmax(0.0, rh));
-                if (k == 0) {
-                    size_t idx2d = (size_t)j * nx + i;
-                    double terrain = clamp_terrain_host((double)terrain_host[idx2d], grid.ztop);
-                    double z_mass0 = terrain_following_height(terrain, grid.eta_m ? grid.eta_m[0] : (0.5 / nz), grid.ztop);
-                    double dz_agl = fmax(z_mass0 - terrain, 0.0);
-                    double tv_low = temp_k * (1.0 + 0.61 * qv_val);
-                    psfc[idx2d] = (float)(p_full * exp(G * dz_agl / (R_D * fmax(tv_low, 150.0))));
-                    t2[idx2d] = (float)temp_k;
-                    q2[idx2d] = (float)qv_val;
-                }
             }
         }
     }
@@ -768,19 +853,127 @@ void write_netcdf(const StateGPU& state, const GridConfig& grid,
     }
     NC_CHECK(nc_put_var_float(ncid, var_rh, scratch_mass.data()));
 
+    auto idx3m = [&](int k, int j, int i) -> size_t {
+        return ((size_t)k * ny + j) * nx + i;
+    };
+
+    int legacy_k = 0;
+    int surf_k = (nz > 1) ? 1 : 0;
+    int next_k = (nz > 2) ? 2 : surf_k;
+    double eta_legacy = grid.eta_m ? grid.eta_m[legacy_k] : ((legacy_k + 0.5) / nz);
+    double eta_surf = grid.eta_m ? grid.eta_m[surf_k] : ((surf_k + 0.5) / nz);
+    double eta_next = grid.eta_m ? grid.eta_m[next_k] : ((next_k + 0.5) / nz);
+
+    for (int j = 0; j < ny; ++j) {
+        for (int i = 0; i < nx; ++i) {
+            size_t idx2d = (size_t)j * nx + i;
+            size_t idx_legacy = idx3m(legacy_k, j, i);
+            size_t idx_surf = idx3m(surf_k, j, i);
+            size_t idx_next = idx3m(next_k, j, i);
+
+            double terrain = clamp_terrain_host((double)terrain_host[idx2d], grid.ztop);
+            double terrain_slope_local = (double)terrain_slope[idx2d];
+
+            double p_full_legacy = fmax((double)pressure_mass[idx_legacy], 1.0);
+            double theta_legacy = (double)theta_mass[idx_legacy];
+            double qv_legacy = fmax((double)qv_mass[idx_legacy], 0.0);
+            double temp_legacy = theta_legacy * pow(p_full_legacy / P0, KAPPA);
+            double z_legacy = terrain_following_height(terrain, eta_legacy, grid.ztop);
+            double dz_legacy_agl = fmax(z_legacy - terrain, 0.0);
+            double tv_legacy = temp_legacy * (1.0 + 0.61 * qv_legacy);
+            psfc[idx2d] = (float)(p_full_legacy * exp(G * dz_legacy_agl / (R_D * fmax(tv_legacy, 150.0))));
+
+            t2_lml[idx2d] = (float)temp_legacy;
+            q2_lml[idx2d] = (float)qv_legacy;
+            double es_legacy = saturation_vapor_pressure_liquid(temp_legacy);
+            double qvs_legacy = vapor_epsilon() * es_legacy / fmax((double)psfc[idx2d] - es_legacy, 1.0);
+            rh2_lml[idx2d] = (float)fmin(100.0, fmax(0.0, 100.0 * qv_legacy / fmax(qvs_legacy, 1.0e-12)));
+
+            double theta1 = (double)theta_mass[idx_surf];
+            double qv1 = fmax((double)qv_mass[idx_surf], 0.0);
+            double u1 = (double)u_mass[idx_surf];
+            double v1 = (double)v_mass[idx_surf];
+            double z1_agl = fmax(terrain_following_height(terrain, eta_surf, grid.ztop) - terrain, 0.0);
+            bool has_second_level = (next_k > surf_k);
+            double theta2_level = has_second_level ? (double)theta_mass[idx_next] : theta1;
+            double qv2_level = has_second_level ? fmax((double)qv_mass[idx_next], 0.0) : qv1;
+            double z2_agl = has_second_level
+                ? fmax(terrain_following_height(terrain, eta_next, grid.ztop) - terrain, z1_agl + 1.0)
+                : (z1_agl + 1.0);
+
+            double theta_skin = (double)tsk[idx2d];
+            if (!(theta_skin > 0.0)) theta_skin = theta1;
+            double theta_skin_min = theta_skin;
+            double theta_skin_max = theta_skin;
+            for (int jj = max(0, j - 1); jj <= min(ny - 1, j + 1); ++jj) {
+                for (int ii = max(0, i - 1); ii <= min(nx - 1, i + 1); ++ii) {
+                    double theta_nb = (double)tsk[(size_t)jj * nx + ii];
+                    if (!(theta_nb > 0.0)) theta_nb = theta_skin;
+                    theta_skin_min = std::fmin(theta_skin_min, theta_nb);
+                    theta_skin_max = std::fmax(theta_skin_max, theta_nb);
+                }
+            }
+            double theta_skin_range = theta_skin_max - theta_skin_min;
+            double terrain_min = terrain;
+            double terrain_max = terrain;
+            for (int jj = max(0, j - 1); jj <= min(ny - 1, j + 1); ++jj) {
+                for (int ii = max(0, i - 1); ii <= min(nx - 1, i + 1); ++ii) {
+                    double terrain_nb = clamp_terrain_host((double)terrain_host[(size_t)jj * nx + ii], grid.ztop);
+                    terrain_min = std::fmin(terrain_min, terrain_nb);
+                    terrain_max = std::fmax(terrain_max, terrain_nb);
+                }
+            }
+            double terrain_relief = terrain_max - terrain_min;
+            SurfaceLayerState sfc = diagnose_surface_layer_state(
+                theta_skin, qv_sfc, u1, v1, theta1, qv1, z1_agl,
+                has_second_level, theta2_level, qv2_level, z2_agl, z0
+            );
+            double admitseam_local = admittance_seam_factor(
+                theta_skin_range, terrain_relief, terrain_slope_local, 1.0
+            );
+            double moistgate_local = moisture_availability_scale(
+                admitseam_local, fmax(moisture_gate_strength, 0.0)
+            );
+            double moistmem_local = (double)moistmem[idx2d];
+            if (!(moistmem_local > 0.0)) moistmem_local = moistgate_local;
+            double qv_sfc_effective = apply_surface_moisture_scale(
+                sfc.qv_sfc_local, qv1, moistmem_local
+            );
+            double theta2_diag = diagnose_screen_theta(
+                sfc.theta_sfc_local, theta1, 2.0, sfc.z1_agl, z0
+            );
+            double temp_2m = theta2_diag * pow(fmax((double)psfc[idx2d], 1.0) / P0, KAPPA);
+            double q2_diag = diagnose_screen_qv(
+                qv_sfc_effective, qv1, 2.0, sfc.z1_agl, z0
+            );
+            double u10_diag = diagnose_screen_wind_component(u1, 10.0, sfc.z1_agl, z0);
+            double v10_diag = diagnose_screen_wind_component(v1, 10.0, sfc.z1_agl, z0);
+
+            t2[idx2d] = (float)temp_2m;
+            q2[idx2d] = (float)q2_diag;
+            rh2[idx2d] = (float)diagnose_screen_relative_humidity(temp_2m, (double)psfc[idx2d], q2_diag);
+            u10[idx2d] = (float)u10_diag;
+            v10[idx2d] = (float)v10_diag;
+            admitseam[idx2d] = (float)admitseam_local;
+            moistgate[idx2d] = (float)moistgate_local;
+            u10_lml[idx2d] = (float)((double)u_mass[idx_legacy]);
+            v10_lml[idx2d] = (float)((double)v_mass[idx_legacy]);
+        }
+    }
+
     NC_CHECK(nc_put_var_float(ncid, var_psfc, psfc.data()));
     NC_CHECK(nc_put_var_float(ncid, var_t2, t2.data()));
     NC_CHECK(nc_put_var_float(ncid, var_q2, q2.data()));
-    CUDA_CHECK(cudaMemcpy(tsk.data(), state.tskin, n2d * sizeof(real_t), cudaMemcpyDeviceToHost));
+    NC_CHECK(nc_put_var_float(ncid, var_rh2, rh2.data()));
     NC_CHECK(nc_put_var_float(ncid, var_tsk, tsk.data()));
+    NC_CHECK(nc_put_var_float(ncid, var_admitseam, admitseam.data()));
+    NC_CHECK(nc_put_var_float(ncid, var_moistgate, moistgate.data()));
+    NC_CHECK(nc_put_var_float(ncid, var_moistmem, moistmem.data()));
+    NC_CHECK(nc_put_var_float(ncid, var_t2_lml, t2_lml.data()));
+    NC_CHECK(nc_put_var_float(ncid, var_q2_lml, q2_lml.data()));
+    NC_CHECK(nc_put_var_float(ncid, var_rh2_lml, rh2_lml.data()));
 
-    copy_mass_field(state.u, scratch_mass);
-    NC_CHECK(nc_put_var_float(ncid, var_u_mass, scratch_mass.data()));
-    for (int j = 0; j < ny; ++j) {
-        for (int i = 0; i < nx; ++i) {
-            u10[(size_t)j * nx + i] = scratch_mass[(size_t)j * nx + i];
-        }
-    }
+    scratch_mass = u_mass;
     std::vector<float> u_stag(n3d_u, 0.0f);
     for (int k = 0; k < nz; ++k) {
         for (int j = 0; j < ny; ++j) {
@@ -801,14 +994,9 @@ void write_netcdf(const StateGPU& state, const GridConfig& grid,
     }
     NC_CHECK(nc_put_var_float(ncid, var_u_wrf, u_stag.data()));
     NC_CHECK(nc_put_var_float(ncid, var_u10, u10.data()));
+    NC_CHECK(nc_put_var_float(ncid, var_u10_lml, u10_lml.data()));
 
-    copy_mass_field(state.v, scratch_mass);
-    NC_CHECK(nc_put_var_float(ncid, var_v_mass, scratch_mass.data()));
-    for (int j = 0; j < ny; ++j) {
-        for (int i = 0; i < nx; ++i) {
-            v10[(size_t)j * nx + i] = scratch_mass[(size_t)j * nx + i];
-        }
-    }
+    scratch_mass = v_mass;
     std::vector<float> v_stag(n3d_v, 0.0f);
     for (int k = 0; k < nz; ++k) {
         for (int j = 0; j <= ny; ++j) {
@@ -829,6 +1017,7 @@ void write_netcdf(const StateGPU& state, const GridConfig& grid,
     }
     NC_CHECK(nc_put_var_float(ncid, var_v_wrf, v_stag.data()));
     NC_CHECK(nc_put_var_float(ncid, var_v10, v10.data()));
+    NC_CHECK(nc_put_var_float(ncid, var_v10_lml, v10_lml.data()));
 
     dim3 block(8, 8, 4);
     dim3 grid3d((nx + 7) / 8, (ny + 7) / 8, (nz + 3) / 4);
@@ -882,7 +1071,8 @@ void write_netcdf(const StateGPU& state, const GridConfig& grid,
 #else
 void write_netcdf(const StateGPU& state, const GridConfig& grid,
                   const LambertConformal& proj,
-                  double time, int output_num) {
+                  double time, int output_num, double z0, double qv_sfc,
+                  double moisture_gate_strength) {
     fprintf(stderr, "NetCDF output disabled (libnetcdf not found)\n");
 }
 #endif

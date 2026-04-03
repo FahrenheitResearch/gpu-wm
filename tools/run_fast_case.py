@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import shlex
 import shutil
 import subprocess
@@ -187,6 +188,53 @@ def collect_outputs(run_dir: Path) -> list[Path]:
     return sorted((run_dir / "output").glob("gpuwm_*.nc"))
 
 
+def infer_surface_grib_pattern(surface_grib_path: Path) -> tuple[Path, str] | None:
+    match = re.match(r"^(.*wrfsfcf)(\d{2})(\.grib2)$", surface_grib_path.name)
+    if not match:
+        return None
+    prefix, _, suffix = match.groups()
+    return surface_grib_path.parent, f"{prefix}{{hour:02d}}{suffix}"
+
+
+def maybe_run_surface_realism(
+    repo_root: Path,
+    python_exe: str,
+    outputs: list[Path],
+    run_dir: Path,
+    surface_grib_path: Path | None,
+) -> tuple[Path, Path] | None:
+    if surface_grib_path is None:
+        return None
+    pattern_info = infer_surface_grib_pattern(surface_grib_path)
+    if pattern_info is None:
+        print(f"WARNING: could not infer HRRR surface pattern from {surface_grib_path}; skipping surface realism")
+        return None
+    surface_grib_dir, surface_grib_pattern = pattern_info
+    realism_json = run_dir / "surface_realism.json"
+    realism_md = run_dir / "surface_realism.md"
+    try:
+        run_command(
+            [
+                python_exe,
+                "tools/verify_surface_realism.py",
+                *[str(path) for path in outputs],
+                "--surface-grib-dir",
+                str(surface_grib_dir),
+                "--surface-grib-pattern",
+                surface_grib_pattern,
+                "--json-out",
+                str(realism_json),
+                "--markdown-out",
+                str(realism_md),
+            ],
+            repo_root,
+        )
+    except subprocess.CalledProcessError as exc:
+        print(f"WARNING: surface realism verification failed: {exc}")
+        return None
+    return realism_json, realism_md
+
+
 def render_wrf_products(
     repo_root: Path,
     runner_cmd: list[str],
@@ -226,6 +274,7 @@ def postprocess_outputs(
     init_path: Path,
     run_dir: Path,
     outputs: list[Path],
+    surface_grib_path: Path | None,
 ) -> None:
     verify_json = run_dir / "verify_all.json"
     weather_dir = run_dir / "plots_weather"
@@ -242,6 +291,14 @@ def postprocess_outputs(
             *[str(path) for path in outputs],
         ],
         repo_root,
+    )
+
+    maybe_run_surface_realism(
+        repo_root=repo_root,
+        python_exe=python_exe,
+        outputs=outputs,
+        run_dir=run_dir,
+        surface_grib_path=surface_grib_path,
     )
 
     run_command(
@@ -527,6 +584,14 @@ def main() -> int:
             *[str(path) for path in outputs],
         ]
         run_command(verify_cmd, repo_root)
+        if not args.postprocess_weather:
+            maybe_run_surface_realism(
+                repo_root=repo_root,
+                python_exe=python_exe,
+                outputs=outputs,
+                run_dir=run_dir,
+                surface_grib_path=surface_grib_path,
+            )
 
     if args.postprocess_weather:
         postprocess_outputs(
@@ -535,6 +600,7 @@ def main() -> int:
             init_path=init_path,
             run_dir=run_dir,
             outputs=outputs,
+            surface_grib_path=surface_grib_path,
         )
 
     rendered_dirs: list[Path] = []
@@ -566,6 +632,13 @@ def main() -> int:
         print(f"  Boundary states: {len(boundary_specs)}")
     if rendered_dirs:
         print(f"  WRF plots: {len(rendered_dirs)} directories")
+    if surface_grib_path is not None:
+        realism_json = run_dir / "surface_realism.json"
+        realism_md = run_dir / "surface_realism.md"
+        if realism_json.exists():
+            print(f"  Realism:   {realism_json}")
+        if realism_md.exists():
+            print(f"  RealismMD: {realism_md}")
     print(f"  Init time: {init_elapsed:.1f} s")
     print(f"  Run time:  {run_elapsed:.1f} s")
     return 0

@@ -1,6 +1,6 @@
 # GPU-WM Status
 
-Last updated: 2026-04-01
+Last updated: 2026-04-02
 
 ## Current Position
 
@@ -14,6 +14,78 @@ The active baseline is `exp/semiimplicit-hdiv-half@df9586b`. That branch now:
 - keeps the 4 km Panhandles HRRR realism benchmark plausible through `+3 h`
 
 That means the project is now in solver-consolidation mode rather than solver-triage mode. The next major leverage point is surface realism, especially near-surface thermodynamics and proper surface-layer diagnostics, not another broad dycore rewrite unless the longer validations fail.
+
+The first realism branch is now active:
+
+- branch: `exp/tskin-slab@fa7ea3d`
+- change:
+  - add prognostic 2D `tskin`
+  - update it once per physics step in `src/physics/surface_slab.cu`
+  - feed PBL surface exchange with evolving `tskin`
+  - write `TSK` to NetCDF
+- early result:
+  - the local Panhandles boundary `+3 h` rerun stayed effectively neutral versus
+    the clean `hdiv_half` baseline on existing `T2/Q2/U10/V10` outputs
+  - direct branch-vs-baseline deltas through `+3 h` are still tiny:
+    - `T2 mean|delta| <= 0.0026 K`
+    - `Q2 delta = 0` at float precision
+    - `U10 mean|delta| <= 0.102 m/s`
+    - `V10 mean|delta| <= 0.094 m/s`
+  - but `TSK` itself is evolving, with domain-mean `TSK` rising from
+    `297.40 K` to `297.85 K` by `+3 h`
+- interpretation:
+  - the slab branch is safe enough to keep pushing
+  - but better near-surface diagnostics and/or stronger surface-energy coupling
+    are still likely required before the Panhandles `T2/RH2` realism visibly
+    changes
+
+The most important new realism result is now diagnostic rather than solver-side:
+
+- the branch now writes a true screen-level `T2/RH2` diagnostic alongside
+  retained legacy `*_LML` proxies
+- a clean Panhandles boundary `+3 h` A/B confirmed that the old output path was
+  hiding most of the near-surface signal:
+  - diagnosed `T2` changed by about `1.87 K` mean absolute difference over
+    `+1/+2/+3 h`
+  - diagnosed `RH2` changed by about `8.25` points mean absolute difference
+  - retained `T2_LML`, `U10`, `V10`, and reflectivity-proxy fields stayed
+    identical to the control run
+- interpretation:
+  - the first real breakthrough is that the benchmark was partly apples-to-
+    oranges before
+  - this does not solve surface physics by itself, but it removes a fake
+    handicap and makes the next realism experiments honest
+
+The realism dashboard is now being formalized instead of judged only from GIFs:
+
+- new tool: `tools/verify_surface_realism.py`
+- current coverage:
+  - matched-product `T2/RH2/WIND10` screen-vs-`*_LML` skill
+  - lead-time windows: `0-1 h`, `1-3 h`, `3-6 h`, `1-6 h`
+  - terrain bins: `plains`, `moderate_relief`, `steep_high`
+  - anomaly correlation and spread ratio
+  - coarse solar-phase split
+- workflow:
+  - `tools/run_fast_case.py` now auto-writes
+    `surface_realism.json` and `surface_realism.md`
+    for HRRR-backed runs when matching `wrfsfcfXX` files are present
+- first smoke result on Panhandles `+1/+2/+3 h`:
+  - domain `T2 RMSE = 3.50` vs `4.99` for `T2_LML`
+  - domain `RH2 RMSE = 11.48` vs `15.56` for `RH2_LML`
+  - domain `10 m wind vector RMSE = 4.71` vs `9.81` for `U10_LML/V10_LML`
+  - mountain wind remains the main weak spot:
+    - `steep_high WIND10 RMSE = 5.84`
+    - `steep_high anomaly corr = 0.70`
+
+The next active realism push is now a tunable slab-coupling sweep:
+
+- `surface_slab.cu` now accepts runtime controls for:
+  - slab heat capacity
+  - restore coefficient toward the prior surface state
+  - anchor weight back to the diagnosed column surface state
+- overnight queues are set to test stronger slab settings on Panhandles
+  boundary/static follow-ons once the current `+12 h` screen-diagnostic runs
+  finish
 
 The newest important change is the active `hdiv_half` refinement on top of `exp/semiimplicit-no-slow-metric@24d7eaf`:
 

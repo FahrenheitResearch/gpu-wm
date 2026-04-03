@@ -12,15 +12,12 @@
 
 #include "../../include/constants.cuh"
 #include "../../include/grid.cuh"
+#include "../../include/surface_layer.cuh"
 
 namespace gpuwm {
 
 // Maximum vertical levels for stack-allocated tridiagonal solver
 static constexpr int MAX_NZ = 256;
-
-__device__ double virtual_theta(double theta, double qv) {
-    return theta * (1.0 + 0.61 * fmax(qv, 0.0));
-}
 
 // ----------------------------------------------------------
 // Device helper: Bulk Richardson number at height z
@@ -46,6 +43,7 @@ __global__ void pbl_column_kernel(
     real_t* __restrict__ qv,
     const real_t* __restrict__ rho,
     const real_t* __restrict__ tskin,
+    const real_t* __restrict__ moistmem,
     const real_t* __restrict__ terrain,  // 2D terrain height (m) [nx*ny]
     const double* __restrict__ eta_m,    // eta at mass levels [nz]
     const double* __restrict__ eta_w,    // eta at w-levels [nz+1]
@@ -54,6 +52,7 @@ __global__ void pbl_column_kernel(
     double ztop,       // model top height (m)
     double z0,         // roughness length (m)
     double qv_sfc,     // surface moisture mixing ratio (kg/kg)
+    double moisture_gate_strength,  // heterogeneity-linked surface qv reduction
     double cs,         // Smagorinsky coefficient
     double dt          // timestep for implicit solver
 ) {
@@ -132,45 +131,32 @@ __global__ void pbl_column_kernel(
     double rho1 = rho_col[1];
 
     double theta_skin = (double)tskin[idx2(i, j, nx)];
-    if (!(theta_skin > 0.0)) theta_skin = th1;
-    double theta_sfc_local = theta_skin;
-    double qv_sfc_local = fmax(qv_sfc, 0.0);
-    if (nz > 2) {
-        double z2 = z_agl[2];         // second mass level AGL
-        double dz12 = fmax(z2 - z1, 1.0);
-        double theta_extrap = th1 - z1 * (th_col[2] - th1) / dz12;
-        double qv_extrap = qv1 - z1 * (qv_col[2] - qv1) / dz12;
-
-        theta_extrap = fmax(250.0, fmin(theta_extrap, 330.0));
-        qv_extrap = fmax(0.0, fmin(qv_extrap, 0.03));
-
-        // Blend diagnosed local surface conditions with the configured prior
-        // so the exchange fields can vary horizontally without becoming noisy.
-        theta_sfc_local = 0.75 * theta_extrap + 0.25 * theta_skin;
-        qv_sfc_local = 0.75 * qv_extrap + 0.25 * qv_sfc_local;
+    bool has_second_level = (nz > 2);
+    double th2 = has_second_level ? th_col[2] : th1;
+    double qv2 = has_second_level ? qv_col[2] : qv1;
+    double z2 = has_second_level ? z_agl[2] : (z1 + 1.0);
+    SurfaceLayerState sfc = diagnose_surface_layer_state(
+        theta_skin, qv_sfc, u1, v1, th1, qv1, z1,
+        has_second_level, th2, qv2, z2, z0
+    );
+    double theta_sfc_local = sfc.theta_sfc_local;
+    double qv_sfc_local = sfc.qv_sfc_local;
+    double moisture_scale = (double)moistmem[idx2(i, j, nx)];
+    if (!(moisture_scale > 0.0)) {
+        double thermal_range = skin_theta_range_3x3_field(tskin, i, j, nx, ny, theta_skin);
+        double terrain_relief = terrain_relief_3x3_field(terrain, i, j, nx, ny);
+        double terrain_slope = terrain_slope_2d_field(terrain, i, j, nx, ny, dx, dy);
+        double moisture_activation = admittance_seam_factor(
+            thermal_range, terrain_relief, terrain_slope, 1.0
+        );
+        moisture_scale = moisture_availability_scale(
+            moisture_activation, fmax(moisture_gate_strength, 0.0)
+        );
     }
-
-    // Neutral drag coefficient: Cd = (k / ln(z/z0))^2
-    double log_z_z0 = log(z1 / z0);
-    if (log_z_z0 < 0.5) log_z_z0 = 0.5;  // safety for very low first levels
-    double Cd_neutral = (KARMAN / log_z_z0) * (KARMAN / log_z_z0);
-
-    // Bulk Richardson number for stability classification
-    double theta_v1 = virtual_theta(th1, qv1);
-    double theta_v_sfc = virtual_theta(theta_sfc_local, qv_sfc_local);
-    double Ri_sfc = (G / theta_v1) * (theta_v1 - theta_v_sfc) * z1 / (wspd * wspd);
-    Ri_sfc = fmax(-10.0, fmin(Ri_sfc, 10.0));  // bound
-
-    // Stability correction
-    double Cd = Cd_neutral;
-    if (Ri_sfc > 0.0) {
-        // Stable: (1 - 5*Ri)^2, cut off at Ri = 0.2 (Cd -> 0)
-        double fac = fmax(1.0 - 5.0 * Ri_sfc, 0.0);
-        Cd *= fac * fac;
-    } else {
-        // Unstable: (1 - 16*Ri)^0.5
-        Cd *= sqrt(1.0 - 16.0 * Ri_sfc);
-    }
+    qv_sfc_local = apply_surface_moisture_scale(qv_sfc_local, qv1, moisture_scale);
+    double Ri_sfc = sfc.ri_sfc;
+    double Cd = sfc.cd;
+    wspd = sfc.wspd;
 
     // Friction velocity
     double ustar = sqrt(Cd) * wspd;
@@ -218,17 +204,17 @@ __global__ void pbl_column_kernel(
     //    All heights are AGL so PBL depth is relative to terrain
     // ----------------------------------------------------------
     double pbl_h = z_agl[1];  // minimum PBL height = first level AGL
-    double theta_ref = virtual_theta(th_col[1], qv_col[1]);  // reference theta near surface
+    double theta_ref = surface_layer_virtual_theta(th_col[1], qv_col[1]);  // reference theta near surface
 
     for (int k = 2; k < nz; k++) {
         double Ri_bulk = bulk_richardson(
-            virtual_theta(th_col[k], qv_col[k]), theta_ref, z_agl[k],
+            surface_layer_virtual_theta(th_col[k], qv_col[k]), theta_ref, z_agl[k],
             u_col[k] - u_col[1], v_col[k] - v_col[1]
         );
         if (Ri_bulk > 0.25) {
             // Interpolate between k-1 and k
             double Ri_prev = bulk_richardson(
-                virtual_theta(th_col[k-1], qv_col[k-1]), theta_ref, z_agl[k-1],
+                surface_layer_virtual_theta(th_col[k-1], qv_col[k-1]), theta_ref, z_agl[k-1],
                 u_col[k-1] - u_col[1], v_col[k-1] - v_col[1]
             );
             double frac = (0.25 - Ri_prev) / fmax(Ri_bulk - Ri_prev, 1.0e-6);
@@ -274,8 +260,8 @@ __global__ void pbl_column_kernel(
             Km_col[k] = cs * cs * delta * delta * S;
 
             // Local Richardson number stability correction
-            double thv_k = virtual_theta(th_col[k], qv_col[k]);
-            double thv_kp1 = virtual_theta(th_col[k + 1], qv_col[k + 1]);
+            double thv_k = surface_layer_virtual_theta(th_col[k], qv_col[k]);
+            double thv_kp1 = surface_layer_virtual_theta(th_col[k + 1], qv_col[k + 1]);
             double dthvdz = (thv_kp1 - thv_k) / dz_k;
             double thv_avg = 0.5 * (thv_k + thv_kp1);
             double Ri_loc = (G / fmax(thv_avg, 200.0)) * dthvdz / fmax(S2, SMALL);
@@ -489,7 +475,7 @@ __global__ void pbl_column_kernel(
 // Host driver
 // ----------------------------------------------------------
 void run_pbl(StateGPU& state, const GridConfig& grid,
-             double z0, double qv_sfc, double cs, double dt) {
+             double z0, double qv_sfc, double moisture_gate_strength, double cs, double dt) {
     int nx = grid.nx, ny = grid.ny, nz = grid.nz;
 
     dim3 block2d(16, 16);
@@ -497,13 +483,13 @@ void run_pbl(StateGPU& state, const GridConfig& grid,
 
     pbl_column_kernel<<<grid2d, block2d>>>(
         state.u, state.v, state.theta, state.qv,
-        state.rho, state.tskin,
+        state.rho, state.tskin, state.moistmem,
         state.terrain,       // 2D terrain height field
         state.eta_m,         // eta at mass levels [nz]
         state.eta,           // eta at w-levels [nz+1]
         nx, ny, nz, grid.dx, grid.dy,
         grid.ztop,           // model top height
-        z0, qv_sfc, cs,
+        z0, qv_sfc, moisture_gate_strength, cs,
         dt
     );
 }

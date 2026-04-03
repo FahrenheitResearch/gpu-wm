@@ -1,6 +1,6 @@
 # GPU-WM Moonshot Notes
 
-Last updated: 2026-04-01
+Last updated: 2026-04-02
 
 ## Purpose
 
@@ -65,6 +65,45 @@ Expected compute impact:
 - Small.
 - One extra 2D state plus cheap per-column surface math.
 
+Current read on the first implementation:
+
+- `exp/tskin-slab@fa7ea3d` now exists and has already survived the local
+  Panhandles boundary benchmark through `+3 h` without degrading the settled
+  solver baseline.
+- Direct branch-vs-baseline output deltas against a clean
+  `exp/semiimplicit-hdiv-half@62ea585` Panhandles boundary `+1/+2/+3 h` run are
+  still tiny on the existing near-surface diagnostics:
+  - `T2 mean|delta| = 0.0007 / 0.0016 / 0.0026 K`
+  - `Q2 mean|delta| = 0.0 / 0.0 / 0.0`
+  - `U10 mean|delta| = 0.019 / 0.056 / 0.102 m/s`
+  - `V10 mean|delta| = 0.014 / 0.045 / 0.094 m/s`
+- The new slab state is not static:
+  - domain-mean `TSK` increased from `297.40 K` at init to `297.85 K` by `+3 h`
+  - domain-mean `TSK - T2` stayed near `9.6 K`
+- interpretation:
+  - the slab branch is currently non-destructive and physically alive
+  - but the present surface-memory coupling is still too weak to materially
+    move the legacy `T2/Q2/U10/V10` story by `+3 h`
+  - that keeps the next likely leverage point pointed at stronger surface
+    thermodynamic wiring and/or proper 2 m / 10 m diagnostics, not more broad
+    solver surgery
+
+Current read after the new screen-level diagnostic pass:
+
+- the proper `T2/RH2` diagnostic is now the first verified realism unlock
+- on a clean Panhandles boundary `+3 h` A/B, the diagnosed screen fields moved
+  materially while retained low-level proxies and non-surface fields stayed
+  fixed:
+  - `T2 mean|delta| ~ 1.87 K`
+  - `RH2 mean|delta| ~ 8.25 points`
+  - `T2_LML = control`, `U10 = control`, `V10 = control`,
+    reflectivity proxy = control
+- interpretation:
+  - GPT Pro's diagnosis was right: the old screen-output path was hiding much
+    of the surface signal
+  - the next moonshot is no longer "add any slab"; it is "make the slab strong
+    enough to matter now that the diagnostic path is honest"
+
 ### 1. Proper Near-Surface Diagnostics
 
 Category: realism diagnostics
@@ -86,6 +125,13 @@ Quick falsification:
 - Add `TSK` and separate 2 m / 10 m diagnostics.
 - If the comparison story barely changes, keep the diagnostics but do not treat
   them as the main realism lever.
+
+Current verdict:
+
+- passed
+- the diagnostics changed the visible near-surface story immediately and should
+  now be treated as baseline output, with legacy `*_LML` proxies retained for
+  honesty during transition
 
 ### 2. Fast Acoustic `u/v` Pressure-Gradient Substepping
 
